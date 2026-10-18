@@ -61,6 +61,17 @@ canvas { display: block; width: 100%; background: #090c12; }
 #position-track { background: #090c12; cursor: grab; }
 #position-track:active { cursor: grabbing; }
 #position-info { color: var(--muted); font-variant-numeric: tabular-nums; }
+#gnss-threat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px; border-block: 1px solid var(--line); background: var(--panel); }
+.gnss-threat-indicator { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 9px 12px; border-left: 3px solid var(--line); }
+.gnss-threat-indicator span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.gnss-threat-indicator strong { font-size: 13px; font-weight: 600; }
+.gnss-threat-indicator[data-state="good"] { border-left-color: #66ff88; }
+.gnss-threat-indicator[data-state="good"] strong { color: #66ff88; }
+.gnss-threat-indicator[data-state="warning"] { border-left-color: #ffff66; }
+.gnss-threat-indicator[data-state="warning"] strong { color: #ffff66; }
+.gnss-threat-indicator[data-state="bad"] { border-left-color: #ff7262; }
+.gnss-threat-indicator[data-state="bad"] strong { color: #ff7262; }
+.gnss-threat-indicator[data-state="off"] strong { color: var(--muted); }
 body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { background-color: #40587e99; }
 #signal-plots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 #constellation-filter { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
@@ -144,4 +155,4 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .playback-controls button { display: inline-flex; align-items: center; gap: 5px; }
 .playback-controls label { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 800px) { .osnma-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-overview > div:nth-child(2) { border-right: 0; } .osnma-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .osnma-status-grid, .osnma-auth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-status-grid > div:nth-child(3n), .osnma-auth-grid > div:nth-child(4n) { border-right: 1px solid var(--line); } .osnma-status-grid > div:nth-child(2n), .osnma-auth-grid > div:nth-child(2n) { border-right: 0; } }
-@media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }
+@media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } #gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }

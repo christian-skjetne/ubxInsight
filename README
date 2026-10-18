@@ -15,9 +15,9 @@ Browser app:
 	and is applied on connection, on `Send config`, or when changed while connected.
 	Unsupported interfaces/messages may be rejected individually; inspect the
 	configuration indicator for ACK/NAK results. Configuration is RAM-only.
-- The status bar identifies the receiver-side interface using a current-port
-	UBX-CFG-PRT poll when supported. Firmware without this legacy poll shows
-	`Interface: unknown (CFG-PRT unavailable)` instead of guessing. Linux
+
+- The status bar identifies the receiver-side interface using UBX-MON-COMMS
+  port counters, requiring both RX and TX activity. Linux
 	`/dev/ttyACM0` commonly represents native receiver USB, not UART1; USB-to-UART
 	adapters instead reach whichever receiver UART they are wired to. The host
 	device name alone does not establish the receiver-side interface.
@@ -60,4 +60,10 @@ OSNMA display:
 	The displayed receiver time difference remains unchanged until a check is reported.
 
 Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
+
+MON-COMMS live interface probe (Node.js): in `tools/mon-comms-probe`, run
+`npm install`, then `node probe.cjs COM5 38400` (replace the port and baud rate
+with the serial connection currently used by the receiver). Disconnect the
+browser app first so it releases the COM port. The probe prints the request,
+response payload, and RX/TX counters for every reported port.
 

@@ -57,6 +57,12 @@
     </section>
     <section id="signals-panel" role="tabpanel" aria-labelledby="signals-tab" hidden>
       <p id="signals-empty">Waiting for GNSS monitoring data.</p>
+      <section id="gnss-threat-summary" aria-label="Current jamming and spoofing status">
+        <div class="gnss-threat-indicator" data-state="waiting"><span>MON-RF jamming</span><strong>Waiting</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>NAV-STATUS spoofing</span><strong>Waiting</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>SEC-SIG jamming</span><strong>Waiting</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>SEC-SIG spoofing</span><strong>Waiting</strong></div>
+      </section>
       <fieldset id="constellation-filter">
         <legend>Constellations</legend>
         <label class="constellation gps"><input type="checkbox" value="0" checked> GPS</label>

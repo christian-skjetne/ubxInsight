@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const monCommsProbe = require("../tools/mon-comms-probe/probe.cjs");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "scope.js"), "utf8").replace(/\r\n/g, "\n");
 
@@ -54,6 +55,139 @@ test("signal charts handle accumulated multi-satellite histories without argumen
   assert.equal(labels[0], "55");
   assert.equal(labels[4], "0");
   assert.doesNotThrow(() => context.drawSignalChart(canvas, [], {}));
+});
+
+test("signal chart keeps empty frequency epochs on the timeline without plotting them", () => {
+  const labels = [];
+  let plottedPoints = 0;
+  const drawing = new Proxy({
+    fillText(text) { labels.push(String(text)); },
+    arc() { plottedPoints += 1; },
+  }, { get(target, property) { return target[property] ?? (() => {}); } });
+  const canvas = { getContext: () => drawing };
+  const context = loadFunctions(["drawSignalChart"], {
+    sizeCanvas: () => ({ width: 800, height: 400 }), window: { devicePixelRatio: 1 },
+    HISTORY_LENGTH: 600, signalChartState: new Map(), signalHover: new Map(),
+  });
+  const series = [{ label: "Jammed frequency", color: "red", values: [
+    { epoch: 1, value: 1575420000 }, { epoch: 2, value: null },
+  ] }];
+  context.drawSignalChart(canvas, series, { min: 1150000000, max: 1650000000, points: true });
+  assert.equal(context.signalChartState.get(canvas).lastEpoch, 2);
+  assert.equal(labels.at(-1), "2");
+  assert.equal(plottedPoints, 1);
+});
+
+test("empty SEC-SIG frequency frames retain their epoch and detection state", () => {
+  const context = loadFunctions(["parseSecSig"], {
+    secSigRawFramesReceived: 0, secSigFramesReceived: 0,
+    secSecuritySummary: { innerHTML: "" }, signalsEmpty: { hidden: true }, replayRebuilding: false,
+    receiverThreat: { secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null },
+    signalEpoch: { sec: 0 }, signalHistory: { secJam: [], secSpoof: [], secFrequency: [] },
+    appendHistory(history, sample) { history.push(sample); }, drawSignals() {},
+  });
+  const payload = new Uint8Array([2, 0b00101011, 0, 0]);
+  context.parseSecSig(payload);
+  assert.equal(context.signalHistory.secFrequency[0].epoch, 1);
+  assert.equal(context.signalHistory.secFrequency[0].value, null);
+  assert.equal(context.receiverThreat.secJamEnabled, true);
+  assert.equal(context.receiverThreat.secSpoofEnabled, true);
+});
+
+test("signal hover reports an empty frequency epoch as unavailable", () => {
+  const readout = { innerHTML: "" };
+  const canvas = { getBoundingClientRect: () => ({ left: 0 }), closest: () => ({ querySelector: () => readout }) };
+  const context = loadFunctions(["updateSignalHover"], {
+    signalChartState: new Map([[canvas, { series: [{ label: "Jammed frequency", color: "red", values: [{ epoch: 2, value: null }] }], box: { x: 0, width: 100 }, firstEpoch: 1, lastEpoch: 2 }]]),
+    signalHover: new Map(), window: { devicePixelRatio: 1 }, drawSignals() {},
+  });
+  context.updateSignalHover(canvas, { clientX: 100 });
+  assert.match(readout.innerHTML, /Jammed frequency: n\/a/);
+});
+
+test("GNSS threat summary distinguishes status severity and disabled detection", () => {
+  const context = loadFunctions(["gnssThreatPresentation"], {});
+  const check = (kind, value, label, state, enabled) => {
+    const result = context.gnssThreatPresentation(kind, value, enabled);
+    assert.equal(result.label, label);
+    assert.equal(result.state, state);
+  };
+  check("monRfJam", null, "Waiting", "waiting");
+  check("monRfJam", 1, "Normal", "good");
+  check("secJam", 2, "Warning", "warning");
+  check("secSpoof", 3, "Affirmed", "bad");
+  check("secJam", 1, "Detection off", "off", false);
+  check("navSpoof", 0, "Inactive", "off");
+});
+
+test("MON-COMMS selects a recognized port with both RX and TX activity", () => {
+  const context = loadFunctions(["parseMonCommsInterface"], {});
+  const payload = new Uint8Array(8 + 2 * 40);
+  payload[0] = 0; payload[1] = 2;
+  const data = new DataView(payload.buffer);
+  data.setUint16(8, 0x0300, true);
+  data.setUint32(12, 10000, true);
+  data.setUint32(20, 0, true);
+  data.setUint16(48, 0x0100, true);
+  data.setUint32(52, 500, true);
+  data.setUint32(60, 700, true);
+  assert.equal(context.parseMonCommsInterface(payload), "UART1");
+  assert.equal(context.parseMonCommsInterface(new Uint8Array(8)), null);
+  const truncated = new Uint8Array(8 + 2 * 15); truncated[1] = 2;
+  assert.equal(context.parseMonCommsInterface(truncated), null);
+  const malformed = new Uint8Array(8 + 2 * 40 + 1); malformed[1] = 2;
+  assert.equal(context.parseMonCommsInterface(malformed), null);
+});
+
+test("UBX dispatcher routes MON-COMMS responses to the pending interface poll", () => {
+  const resolved = [];
+  const context = loadFunctions(["handleUbx"], {
+    pendingInterfacePoll: (name) => resolved.push(name),
+    parseMonCommsInterface: () => "USB",
+  });
+  context.handleUbx(0x0a, 0x36, new Uint8Array(0));
+  assert.deepEqual(resolved, ["USB"]);
+});
+
+test("interface detection polls MON-COMMS and displays its parsed result", async () => {
+  let writtenFrame;
+  const context = loadFunctions(["detectReceiverInterface", "ubxFrame", "checksum"], {
+    receiverInterface: { textContent: "" }, pendingInterfacePoll: null,
+    writer: { write(frame) { writtenFrame = frame; return Promise.resolve(); } },
+    setTimeout, clearTimeout,
+  });
+  const detecting = context.detectReceiverInterface();
+  assert.equal(writtenFrame[2], 0x0a);
+  assert.equal(writtenFrame[3], 0x36);
+  context.pendingInterfacePoll("USB");
+  await detecting;
+  assert.equal(context.receiverInterface.textContent, "Interface: USB");
+});
+
+test("Node MON-COMMS probe decodes bidirectional activity and split UBX frames", () => {
+  const payload = Buffer.alloc(8 + 2 * 40);
+  payload[0] = 0; payload[1] = 2;
+  const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  data.setUint16(8, 0x0300, true);
+  data.setUint32(12, 50000, true);
+  data.setUint32(20, 0, true);
+  data.setUint16(48, 0x0100, true);
+  data.setUint32(52, 700, true);
+  data.setUint32(60, 900, true);
+  const result = monCommsProbe.parseMonCommsPayload(payload);
+  assert.equal(result.recordBytes, 40);
+  assert.equal(result.activeInterface, "UART1");
+  assert.equal(monCommsProbe.formatInterfaceText(result.activeInterface, "COM26"), "Interface: UART1 (COM26)");
+  assert.deepEqual(result.ports.map(({ name, active }) => `${name}:${active}`), ["USB:false", "UART1:true"]);
+
+  const response = monCommsProbe.buildUbxFrame(0x0a, 0x36, payload);
+  assert.equal(monCommsProbe.formatHex(response.subarray(0, 2)), "B5 62");
+  const first = monCommsProbe.extractUbxFrames(Buffer.concat([Buffer.from([0x00]), response.subarray(0, 7)]));
+  assert.equal(first.frames.length, 0);
+  const second = monCommsProbe.extractUbxFrames(Buffer.concat([first.remainder, response.subarray(7)]));
+  assert.equal(second.frames.length, 1);
+  assert.equal(second.frames[0][2], 0x0a);
+  assert.equal(second.frames[0][3], 0x36);
 });
 
 test("map accepts only valid position fixes", () => {

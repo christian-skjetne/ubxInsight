@@ -111,6 +111,7 @@
   const positionInfo = document.querySelector("#position-info");
   const signalsEmpty = document.querySelector("#signals-empty");
   const constellationFilter = document.querySelector("#constellation-filter");
+  const gnssThreatIndicators = [...document.querySelectorAll("#gnss-threat-summary .gnss-threat-indicator")];
   const signalCharts = { cno: document.querySelector("#cno-chart"), doppler: document.querySelector("#doppler-chart"), jamState: document.querySelector("#jam-state-chart"), jamIndex: document.querySelector("#jam-index-chart"), agc: document.querySelector("#agc-chart"), spoof: document.querySelector("#spoof-chart"), secState: document.querySelector("#sec-state-chart"), secFrequency: document.querySelector("#sec-frequency-chart") };
   const secSecuritySummary = document.querySelector("#sec-security-summary");
   const secEventLog = document.querySelector("#sec-event-log");
@@ -170,7 +171,7 @@
   let mapMarker = null;
   let positionView = null;
   let positionDrag = null;
-  const receiverThreat = { monRfJam: 0, navSpoof: 0, secJam: 0, secSpoof: 0 };
+  const receiverThreat = { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null };
   const signalHistory = { cno: new Map(), doppler: new Map(), jamState: [], jamIndex: [], agc: [], pga: [], spoof: [], secJam: [], secSpoof: [], secFrequency: [] };
   const secEvents = [];
   let secSigFramesReceived = 0;
@@ -244,7 +245,7 @@
     for (const history of Object.values(signalHistory)) history instanceof Map ? history.clear() : history.length = 0;
     secEvents.length = 0; latestPga.length = 0; secSigFramesReceived = 0; secSigRawFramesReceived = 0;
     osnmaFrames.clear(); osnmaE1bFrameCount = 0; osnmaGalileoTime = null; latestOsnmaStatus = null; latestOsnmaTimeCheck = null; osnmaSatelliteResults.clear(); Object.keys(retainedOsnmaCodes).forEach((key) => { retainedOsnmaCodes[key] = null; }); osnmaTrustStatus.textContent = "Not loaded"; osnmaAuthStatus.textContent = "Not verified"; renderOsnma();
-    signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 }; Object.assign(receiverThreat, { monRfJam: 0, navSpoof: 0, secJam: 0, secSpoof: 0 });
+    signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 }; Object.assign(receiverThreat, { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null });
     signalsEmpty.hidden = false; secSecuritySummary.innerHTML = "<strong>SEC-SIG:</strong> awaiting X20 security data."; secEventLog.innerHTML = "<strong>SEC-SIGLOG:</strong> no events.";
     drawSignals();
     const { width: trackWidth, height: trackHeight } = sizeCanvas(positionTrack); const trackContext = positionTrack.getContext("2d"); trackContext.fillStyle = "#090c12"; trackContext.fillRect(0, 0, trackWidth, trackHeight);
@@ -437,11 +438,13 @@
     const margin = { left: 48 * dpr, right: 14 * dpr, top: 12 * dpr, bottom: 27 * dpr }; const box = { x: margin.left, y: margin.top, width: width - margin.left - margin.right, height: height - margin.top - margin.bottom };
     context.fillStyle = "#090c12"; context.fillRect(0, 0, width, height);
     let lastEpoch = -Infinity; let minValue = Infinity; let maxValue = -Infinity;
-    let hasSamples = false;
+    let hasSamples = false; let hasValues = false;
     for (const item of series) {
       for (const sample of item.values) {
         hasSamples = true;
         lastEpoch = Math.max(lastEpoch, sample.epoch);
+        if (!Number.isFinite(sample.value)) continue;
+        hasValues = true;
         minValue = Math.min(minValue, sample.value);
         maxValue = Math.max(maxValue, sample.value);
       }
@@ -449,7 +452,7 @@
     if (!hasSamples) return;
     const firstEpoch = lastEpoch - HISTORY_LENGTH + 1;
     signalChartState.set(canvas, { series, box, firstEpoch, lastEpoch });
-    const min = options.min ?? minValue; const max = options.max ?? maxValue; const range = Math.max(max - min, 1);
+    const min = options.min ?? (hasValues ? minValue : 0); const max = options.max ?? (hasValues ? maxValue : 1); const range = Math.max(max - min, 1);
     const yForValue = (value, axisMin = min, axisMax = max) => box.y + box.height - (value - axisMin) / Math.max(axisMax - axisMin, 1) * box.height;
     context.font = `${11 * dpr}px "Segoe UI", sans-serif`; context.fillStyle = "#9ba8bc"; context.strokeStyle = "#293447"; context.lineWidth = dpr; context.textAlign = "right"; context.textBaseline = "middle";
     const yTicks = options.yTicks || Array.from({ length: 5 }, (_, tick) => min + (4 - tick) / 4 * range);
@@ -458,7 +461,19 @@
     for (let tick = 0; tick <= 4; tick++) { const epoch = Math.round(firstEpoch + tick / 4 * (lastEpoch - firstEpoch)); const x = box.x + tick / 4 * box.width; context.fillText(epoch < 0 ? "n/a" : epoch, x, box.y + box.height + 6 * dpr); }
     context.save(); context.beginPath(); context.rect(box.x, box.y, box.width, box.height); context.clip();
     if (options.thresholds) { context.save(); context.setLineDash([4 * dpr, 4 * dpr]); options.thresholds.forEach((threshold) => { if (threshold.value < min || threshold.value > max) return; const y = yForValue(threshold.value); context.strokeStyle = threshold.color; context.beginPath(); context.moveTo(box.x, y); context.lineTo(box.x + box.width, y); context.stroke(); if (threshold.label) { context.setLineDash([]); context.globalAlpha = 0.9; context.fillStyle = threshold.color; context.font = `${9 * dpr}px "Segoe UI", sans-serif`; context.textAlign = "right"; context.textBaseline = "bottom"; context.fillText(threshold.label, box.x + box.width - 4 * dpr, y - 2 * dpr); context.setLineDash([4 * dpr, 4 * dpr]); } }); context.restore(); }
-    series.forEach((item) => { if (!item.values.length) return; const itemMin = item.min ?? min; const itemMax = item.max ?? max; context.strokeStyle = item.color; context.fillStyle = item.color; context.lineWidth = 1.5 * dpr; context.beginPath(); item.values.forEach((sample, index) => { const x = box.x + (sample.epoch - firstEpoch) / (lastEpoch - firstEpoch) * box.width; const y = yForValue(sample.value, itemMin, itemMax); index ? context.lineTo(x, y) : context.moveTo(x, y); }); if (!options.points) context.stroke(); else item.values.forEach((sample) => { const x = box.x + (sample.epoch - firstEpoch) / (lastEpoch - firstEpoch) * box.width; const y = yForValue(sample.value, itemMin, itemMax); context.beginPath(); context.arc(x, y, 3 * dpr, 0, Math.PI * 2); context.fill(); }); });
+    series.forEach((item) => {
+      if (!item.values.length) return;
+      const itemMin = item.min ?? min; const itemMax = item.max ?? max;
+      context.strokeStyle = item.color; context.fillStyle = item.color; context.lineWidth = 1.5 * dpr; context.beginPath();
+      let hasSegment = false;
+      item.values.forEach((sample) => {
+        if (!Number.isFinite(sample.value)) { hasSegment = false; return; }
+        const x = box.x + (sample.epoch - firstEpoch) / (lastEpoch - firstEpoch) * box.width; const y = yForValue(sample.value, itemMin, itemMax);
+        if (options.points) { context.beginPath(); context.arc(x, y, 3 * dpr, 0, Math.PI * 2); context.fill(); }
+        else { if (hasSegment) context.lineTo(x, y); else context.moveTo(x, y); hasSegment = true; }
+      });
+      if (!options.points && hasSegment) context.stroke();
+    });
     const hoverEpoch = signalHover.get(canvas);
     if (hoverEpoch !== undefined) {
       const x = box.x + (hoverEpoch - firstEpoch) / (lastEpoch - firstEpoch) * box.width;
@@ -478,7 +493,7 @@
     const readout = canvas.closest(".signal-plot").querySelector(".chart-inspect");
     const values = state.series.filter((item) => item.values.length).map((item) => {
       const sample = epoch < 0 ? undefined : item.values.find((candidate) => candidate.epoch === epoch);
-      return `<span style="color:${item.color}">${item.label}: ${sample ? sample.value.toFixed(1) : "n/a"}</span>`;
+      return `<span style="color:${item.color}">${item.label}: ${sample && Number.isFinite(sample.value) ? sample.value.toFixed(1) : "n/a"}</span>`;
     });
     readout.innerHTML = `Epoch ${epoch < 0 ? "n/a" : epoch} | ${values.join(" | ")}`;
     drawSignals();
@@ -502,6 +517,7 @@
     drawSignalChart(signalCharts.agc, [...blockSeries(signalHistory.agc, ["#44ccff", "#88eeff", "#bbeddd"]), ...pgaSeries], { min: 0, max: 8191 });
     drawSignalChart(signalCharts.spoof, [{ label: "Spoof", color: "#00ffff", values: signalHistory.spoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
     drawSignalChart(signalCharts.secState, [{ label: "Jamming", color: "#ffb347", values: signalHistory.secJam }, { label: "Spoofing", color: "#ff66cc", values: signalHistory.secSpoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], points: true, thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    renderGnssThreatSummary();
     const frequencyGuides = [...BAND_MARKERS.reduce((groups, marker) => {
       if (!groups.has(marker.frequency)) groups.set(marker.frequency, { value: marker.frequency, color: marker.color, labels: [] });
       const group = groups.get(marker.frequency); const shortName = marker.label.replace("GPS ", "G ").replace("GAL ", "E ").replace("BDS ", "B ").replace("QZSS ", "Q ");
@@ -509,6 +525,31 @@
       return groups;
     }, new Map()).values()].filter((guide) => guide.value >= 1150000000 && guide.value <= 1650000000).map((guide) => ({ ...guide, label: guide.labels.join("/") }));
     drawSignalChart(signalCharts.secFrequency, [{ label: "Jammed frequency", color: "#ff4444", values: signalHistory.secFrequency }], { min: 1150000000, max: 1650000000, formatY: (value) => `${(value / 1e6).toFixed(0)}M`, points: true, thresholds: frequencyGuides });
+  }
+
+  function gnssThreatPresentation(kind, value, enabled = true) {
+    if (value === null) return { label: "Waiting", state: "waiting" };
+    if (!enabled) return { label: "Detection off", state: "off" };
+    const states = {
+      monRfJam: [["Unknown", "waiting"], ["Normal", "good"], ["Warning", "warning"], ["Critical", "bad"]],
+      navSpoof: [["Inactive", "off"], ["Normal", "good"], ["Indicated", "warning"], ["Multiple indications", "bad"]],
+      secJam: [["Unknown", "waiting"], ["None", "good"], ["Warning", "warning"], ["Critical", "bad"]],
+      secSpoof: [["Unknown", "waiting"], ["None", "good"], ["Indicated", "warning"], ["Affirmed", "bad"]],
+    };
+    return states[kind]?.[value] ? { label: states[kind][value][0], state: states[kind][value][1] } : { label: `Unknown (${value})`, state: "waiting" };
+  }
+
+  function renderGnssThreatSummary() {
+    const statuses = [
+      gnssThreatPresentation("monRfJam", receiverThreat.monRfJam),
+      gnssThreatPresentation("navSpoof", receiverThreat.navSpoof),
+      gnssThreatPresentation("secJam", receiverThreat.secJam, receiverThreat.secJamEnabled !== false),
+      gnssThreatPresentation("secSpoof", receiverThreat.secSpoof, receiverThreat.secSpoofEnabled !== false),
+    ];
+    gnssThreatIndicators.forEach((indicator, index) => {
+      indicator.dataset.state = statuses[index].state;
+      indicator.querySelector("strong").textContent = statuses[index].label;
+    });
   }
 
   const inspectionDisabledCharts = new Set([signalCharts.cno, signalCharts.doppler]);
@@ -1229,6 +1270,8 @@
     appendHistory(signalHistory.secSpoof, { epoch, value: spoofState });
     receiverThreat.secJam = jamState;
     receiverThreat.secSpoof = spoofState;
+    receiverThreat.secJamEnabled = Boolean(jamEnabled);
+    receiverThreat.secSpoofEnabled = Boolean(spoofEnabled);
     const jammedFrequencies = [];
     for (let index = 0; index < frequencyCount; index++) {
       const offset = frequencyOffset + index * 4; const packed = payload[offset] | (payload[offset + 1] << 8) | (payload[offset + 2] << 16) | (payload[offset + 3] << 24);
@@ -1236,6 +1279,7 @@
       const frequency = (packed & 0x00ffffff) * 1000;
       appendHistory(signalHistory.secFrequency, { epoch, value: frequency }); jammedFrequencies.push(frequency);
     }
+    if (!jammedFrequencies.length) appendHistory(signalHistory.secFrequency, { epoch, value: null });
     const jamNames = ["Unknown", "None", "Warning", "Critical"]; const spoofNames = ["Unknown", "None", "Indicated", "Affirmed"];
     secSecuritySummary.innerHTML = `<strong>SEC-SIG v${version}:</strong> ${secSigFramesReceived} decoded frame${secSigFramesReceived === 1 ? "" : "s"} (${secSigRawFramesReceived} raw); jamming detection ${jamEnabled ? "on" : "off"}, ${jamNames[jamState] || jamState}; spoof detection ${spoofEnabled ? "on" : "off"}, ${spoofNames[spoofState] || spoofState}; jammed frequencies ${jammedFrequencies.length ? jammedFrequencies.map((value) => `${(value / 1e6).toFixed(3)} MHz`).join(", ") : "none"}.`;
     signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
@@ -1267,10 +1311,7 @@
   }
 
   function handleUbx(messageClass, messageId, payload) {
-    if (pendingInterfacePoll) {
-      if (messageClass === 0x06 && messageId === 0x00 && payload.length === 20) pendingInterfacePoll(["I2C", "UART1", "UART2", "USB", "SPI"][payload[0]] || null);
-      if (messageClass === 0x05 && messageId === 0x00 && payload.length === 2 && payload[0] === 0x06 && payload[1] === 0x00) pendingInterfacePoll(null);
-    }
+    if (pendingInterfacePoll && messageClass === 0x0a && messageId === 0x36) pendingInterfacePoll(parseMonCommsInterface(payload));
     if (messageClass === 0x05 && (messageId === 0x01 || messageId === 0x00)) receiveConfigAck(messageId, payload);
     if (messageClass === 0x13 && messageId === 0x60) receiveMgaAck(payload);
     if (messageClass === 0x0a && messageId === 0x31) parseMonSpan(payload);
@@ -1289,6 +1330,29 @@
     if (messageClass === 0x02 && messageId === 0x13) parseRxmSfrbx(payload);
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x25) parseNavTimeGal(payload);
   }
+
+  function parseMonCommsInterface(payload) {
+    const headerBytes = 8;
+    const minimumPortBytes = 16;
+    if (payload.length < headerBytes || payload[0] !== 0) return null;
+    const portCount = payload[1];
+    if (!portCount || (payload.length - headerBytes) % portCount !== 0) return null;
+    const portBytes = (payload.length - headerBytes) / portCount;
+    if (portBytes < minimumPortBytes) return null;
+    const portNames = new Map([[0x0000, "I2C"], [0x0100, "UART1"], [0x0200, "UART2"], [0x0300, "USB"], [0x0400, "SPI"]]);
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    let activePort = null;
+    for (let index = 0; index < portCount; index++) {
+      const offset = headerBytes + index * portBytes;
+      const portId = data.getUint16(offset, true);
+      const txBytes = data.getUint32(offset + 4, true);
+      const rxBytes = data.getUint32(offset + 12, true);
+      const name = portNames.get(portId);
+      if (name && txBytes > 0 && rxBytes > 0 && (!activePort || txBytes + rxBytes > activePort.activity)) activePort = { name, activity: txBytes + rxBytes };
+    }
+    return activePort?.name || null;
+  }
+
   function parseMonSpan(payload) {
     if (payload.length < 4) return;
     const usable = Math.min(payload[1], Math.floor((payload.length - 4) / BLOCK_BYTES)); if (!usable) return; if (blockViews.length !== usable) buildBlocks(usable);
@@ -1454,9 +1518,9 @@
     const interfaceName = await new Promise((resolve) => {
       const timeout = setTimeout(() => pendingInterfacePoll?.(null), 1500);
       pendingInterfacePoll = (name) => { clearTimeout(timeout); pendingInterfacePoll = null; resolve(name); };
-      writer.write(ubxFrame(0x06, 0x00, new Uint8Array(0))).catch(() => pendingInterfacePoll?.(null));
+      writer.write(ubxFrame(0x0a, 0x36, new Uint8Array(0))).catch(() => pendingInterfacePoll?.(null));
     });
-    receiverInterface.textContent = interfaceName ? `Interface: ${interfaceName}` : "Interface: unknown (CFG-PRT unavailable)";
+    receiverInterface.textContent = interfaceName ? `Interface: ${interfaceName}` : "Interface: unknown (MON-COMMS reported no active RX/TX port)";
   }
 
   function receiverInterfaceRequests(requests, allInterfaces) {
