@@ -32,6 +32,59 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+test("canvas PNG export downloads a timestamped PNG and revokes its object URL", () => {
+  let exportedBlob;
+  let exportType;
+  let revokedUrl;
+  let scheduledCleanup;
+  let exportCanvas;
+  let copiedCanvas;
+  const captionLines = [];
+  const anchor = { clickCount: 0, click() { this.clickCount += 1; }, remove() { this.removed = true; } };
+  const context = loadFunctions(["canvasPngFilename", "downloadCanvasPng"], {
+    window: { devicePixelRatio: 1 },
+    URL: {
+      createObjectURL(blob) { exportedBlob = blob; return "blob:graph"; },
+      revokeObjectURL(url) { revokedUrl = url; },
+    },
+    document: {
+      createElement(tag) {
+        if (tag === "a") return anchor;
+        const drawing = {
+          fillRect() {}, drawImage(canvas) { copiedCanvas = canvas; },
+          fillText(text) { captionLines.push(text); },
+        };
+        exportCanvas = {
+          width: 0, height: 0, getContext: () => drawing,
+          toBlob(callback, type) { exportType = type; callback({ type }); },
+        };
+        return exportCanvas;
+      },
+      body: { append(element) { this.appended = element; } },
+    },
+    setTimeout(callback, delay) { scheduledCleanup = { callback, delay }; },
+    setStatus() {},
+  });
+  const timestamp = new Date("2026-10-18T12:34:56.000Z");
+  assert.equal(context.canvasPngFilename("RF Block 1 Spectrum", timestamp), "rf-block-1-spectrum-2026-10-18T12-34-56-000Z.png");
+  const canvas = { width: 100, height: 200 };
+  context.downloadCanvasPng(canvas, "Position Track", () => "Cursor: PSD 42 dB");
+  assert.equal(exportType, "image/png");
+  assert.equal(exportedBlob.type, "image/png");
+  assert.equal(exportCanvas.width, 100);
+  assert.equal(exportCanvas.height, 244);
+  assert.equal(copiedCanvas, canvas);
+  assert.deepEqual(captionLines, ["Position Track", "Cursor: PSD 42 dB"]);
+  assert.equal(anchor.download.startsWith("position-track-"), true);
+  assert.equal(anchor.download.endsWith(".png"), true);
+  assert.equal(anchor.href, "blob:graph");
+  assert.equal(anchor.clickCount, 1);
+  assert.equal(anchor.removed, true);
+  assert.equal(scheduledCleanup.delay, 1000);
+  scheduledCleanup.callback();
+  assert.equal(revokedUrl, "blob:graph");
+});
+
 test("signal charts handle accumulated multi-satellite histories without argument overflow", () => {
   const labels = [];
   const drawing = new Proxy({ fillText(text) { labels.push(text); } }, {

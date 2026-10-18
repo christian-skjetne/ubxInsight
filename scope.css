@@ -39,6 +39,9 @@ main { width: 100%; margin: 0; padding: 12px; }
 .block { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
 .block-head { display: flex; align-items: baseline; gap: 14px; padding: 9px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .block-head h2 { margin: 0; font-size: 14px; }
+.graph-export-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.graph-export-button { display: grid; place-items: center; flex: 0 0 28px; width: 28px; min-width: 28px; height: 28px; padding: 0; line-height: 1; }
+.graph-export-button .material-symbols-outlined { display: block; width: 18px; height: 18px; margin: 0; color: currentColor; font-size: 18px; line-height: 18px; transform: none; }
 .meta, .inspect { color: var(--muted); font-size: 12px; }
 .inspect-strip { display: flex; align-items: center; height: 28px; padding: 0 12px; border-bottom: 1px solid var(--line); background: #121720; }
 .inspect { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -81,7 +84,8 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .constellation.gps { --constellation-color: #ffb347; } .constellation.sbas { --constellation-color: #00ffff; } .constellation.galileo { --constellation-color: #66ff88; } .constellation.beidou { --constellation-color: #ff7262; }
 .constellation.imes { --constellation-color: #ffffff; } .constellation.qzss { --constellation-color: #ffff66; } .constellation.glonass { --constellation-color: #f27bfd; } .constellation.navic { --constellation-color: #88aaff; }
 .signal-plot { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.signal-plot header { padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.signal-plot header { position: relative; padding: 9px 48px 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.signal-plot header > .graph-export-button { position: absolute; top: 8px; right: 10px; }
 .signal-plot h2 { margin: 0; font-size: 14px; }
 .signal-plot h2 span { color: var(--muted); font-size: 11px; font-weight: 400; }
 .signal-plot header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }

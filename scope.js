@@ -262,13 +262,21 @@
   function createBlock(index) {
     const section = document.createElement("section");
     section.className = "block";
-    section.innerHTML = `<div class="block-head"><h2>RF Block ${index + 1}</h2><span class="meta">Awaiting MON-SPAN</span></div><div class="inspect-strip"><span class="inspect">Move cursor over spectrum</span></div><canvas class="spectrum"></canvas><canvas class="waterfall"></canvas>`;
+    section.innerHTML = `<div class="block-head"><h2>RF Block ${index + 1}</h2><span class="meta">Awaiting MON-SPAN</span><div class="graph-export-actions"></div></div><div class="inspect-strip"><span class="inspect">Move cursor over spectrum</span></div><canvas class="spectrum"></canvas><canvas class="waterfall"></canvas>`;
     output.append(section);
     const spectrum = section.querySelector(".spectrum");
+    spectrum.id = `rf-block-${index + 1}-spectrum`;
     const rowCount = settings.waterfallMinutes * WATERFALL_ROWS_PER_MINUTE;
     const waterfall = section.querySelector(".waterfall");
+    waterfall.id = `rf-block-${index + 1}-waterfall`;
+    const exportActions = section.querySelector(".graph-export-actions");
     waterfall.style.height = `${settings.waterfallMinutes * 80}px`;
     const view = { section, spectrum, waterfall, meta: section.querySelector(".meta"), inspect: section.querySelector(".inspect"), rows: new Uint8Array(rowCount * BIN_COUNT), timestamps: new Float64Array(rowCount), rowCount, row: 0, filledRows: 0, hasRows: false, waterfallFrame: 0, timestampMarkers: [], lastMarkerSlot: null, frame: null, averageHistory: [], peak: null, hoverBin: null, hoverPinned: false, waterfallCursor: null };
+    exportActions.append(createCanvasExportButton(spectrum, `RF block ${index + 1} spectrum`, () => view.hoverBin !== null ? `Cursor: ${view.inspect.textContent}` : ""));
+    exportActions.append(createCanvasExportButton(waterfall, `RF block ${index + 1} waterfall`, () => {
+      const details = waterfallCursorDetails(view);
+      return details ? `Cursor time: ${details.label}` : "";
+    }));
     spectrum.addEventListener("pointermove", (event) => updateHover(view, event));
     spectrum.addEventListener("pointerleave", () => { if (!view.hoverPinned) clearSpectrumCursor(view); });
     spectrum.addEventListener("click", (event) => { if (event.button === 0) pinSpectrumCursor(view, event); });
@@ -283,6 +291,49 @@
 
   function buildBlocks(count) { output.replaceChildren(); blockViews = Array.from({ length: count }, (_, index) => createBlock(index)); empty.hidden = true; }
   function sizeCanvas(canvas) { const dpr = window.devicePixelRatio || 1; const width = Math.max(1, Math.round(canvas.clientWidth * dpr)); const height = Math.max(1, Math.round(canvas.clientHeight * dpr)); if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; } return { width, height }; }
+
+  function canvasPngFilename(name, timestamp = new Date()) {
+    const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const date = timestamp.toISOString().replace(/[:.]/g, "-");
+    return `${safeName}-${date}.png`;
+  }
+
+  function downloadCanvasPng(canvas, name, cursorInfo = null) {
+    const detail = cursorInfo?.().trim() || "";
+    const dpr = window.devicePixelRatio || 1;
+    const exportCanvas = document.createElement("canvas");
+    const footerHeight = (detail ? 44 : 30) * dpr;
+    exportCanvas.width = canvas.width;
+    exportCanvas.height = canvas.height + footerHeight;
+    const context = exportCanvas.getContext("2d");
+    context.fillStyle = "#090c12"; context.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    context.drawImage(canvas, 0, 0);
+    context.fillStyle = "#e5e9f0"; context.font = `${12 * dpr}px "Segoe UI", sans-serif`;
+    context.textAlign = "left"; context.textBaseline = "top";
+    context.fillText(name, 12 * dpr, canvas.height + 5 * dpr, exportCanvas.width - 24 * dpr);
+    if (detail) {
+      context.fillStyle = "#9ba8bc"; context.font = `${11 * dpr}px "Segoe UI", sans-serif`;
+      context.fillText(detail, 12 * dpr, canvas.height + 22 * dpr, exportCanvas.width - 24 * dpr);
+    }
+    exportCanvas.toBlob((blob) => {
+      if (!blob) { setStatus(`Could not export ${name} as PNG`); return; }
+      const url = URL.createObjectURL(blob);
+      const download = document.createElement("a");
+      download.href = url; download.download = canvasPngFilename(name); download.hidden = true;
+      document.body.append(download); download.click(); download.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, "image/png");
+  }
+
+  function createCanvasExportButton(canvas, name, cursorInfo = null) {
+    const button = document.createElement("button");
+    button.type = "button"; button.className = "secondary graph-export-button";
+    button.setAttribute("aria-label", `Save ${name} as PNG`); button.title = `Save ${name} as PNG`;
+    const icon = document.createElement("span"); icon.className = "material-symbols-outlined"; icon.setAttribute("aria-hidden", "true"); icon.textContent = "download";
+    button.append(icon);
+    button.addEventListener("click", () => downloadCanvasPng(canvas, name, cursorInfo));
+    return button;
+  }
 
   function palette(value) {
     const t = Math.max(0, Math.min(1, (value - 30) / 180));
@@ -646,7 +697,11 @@
     inspectStrip.className = "chart-inspect-strip";
     readout.textContent = inspectionDisabledCharts.has(canvas) ? "Cursor inspection disabled for multi-series view." : "Move cursor over chart to inspect values.";
     inspectStrip.append(readout);
-    canvas.closest(".signal-plot").querySelector("header").after(inspectStrip);
+    const plot = canvas.closest(".signal-plot");
+    const header = plot.querySelector("header");
+    const title = header.querySelector("h2").childNodes[0].textContent.trim();
+    header.append(createCanvasExportButton(canvas, title, () => signalHover.has(canvas) ? `Cursor: ${plot.querySelector(".chart-inspect").textContent}` : ""));
+    header.after(inspectStrip);
     if (inspectionDisabledCharts.has(canvas)) { canvas.classList.add("inspection-disabled"); return; }
     canvas.addEventListener("pointermove", (event) => updateSignalHover(canvas, event));
     canvas.addEventListener("pointerleave", () => { if (!signalHoverPinned.has(canvas)) clearSignalHover(canvas); });
@@ -815,6 +870,10 @@
   positionTrack.addEventListener("pointerup", () => { positionDrag = null; });
   positionTrack.addEventListener("pointercancel", () => { positionDrag = null; });
   positionTrack.addEventListener("dblclick", resetPositionView);
+  positionTrack.parentElement.querySelector(".track-controls").append(createCanvasExportButton(positionTrack, "GNSS position track", () => {
+    const latest = positionFixes.at(-1);
+    return latest ? `Latest fix: ${latest.latitude.toFixed(6)}, ${latest.longitude.toFixed(6)}` : "";
+  }));
   positionRecenter.addEventListener("click", recenterPositionTrack);
   positionZoomIn.addEventListener("click", () => zoomPositionTrack(0.8));
   positionZoomOut.addEventListener("click", () => zoomPositionTrack(1.25));
