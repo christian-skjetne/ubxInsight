@@ -1,0 +1,91 @@
+UBX Scope 
+Plot Ublox UBX SPAN (RF spectrum) power spectral density plots in-browser
+Requires an F9 or X20-series Ublox receiver.
+License: GPLv3
+
+Features:
+- Click the plot to set a marker at that frequency in either plot. Click elsewhere to remove.
+- Toggle max/avg plots to reset
+
+Setup:
+- Install pyUBX: https://github.com/mayeranalytics/pyUBX
+
+Browser app:
+- Serve this directory over localhost, for example: `python -m http.server 8765`
+- Open `http://localhost:8765/scope.html` in Chrome or Edge.
+- The page can also be opened directly. In `file://` mode the map automatically
+	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
+- Connect the receiver and select `Start recording` to begin capturing raw bytes.
+- In Settings, enable `Configure all receiver interfaces` and select Apply to
+	configure UBX message output on I2C, UART1, UART2, USB and SPI. This also
+	disables NMEA output on those interfaces; baud rates and input protocols are
+	unchanged. The default remains UART1 only. The selection is saved locally
+	and is applied on connection, on `Send config`, or when changed while connected.
+	Unsupported interfaces/messages may be rejected individually; inspect the
+	configuration indicator for ACK/NAK results. Configuration is RAM-only.
+- The status bar identifies the receiver-side interface using a current-port
+	UBX-CFG-PRT poll when supported. Firmware without this legacy poll shows
+	`Interface: unknown (CFG-PRT unavailable)` instead of guessing. Linux
+	`/dev/ttyACM0` commonly represents native receiver USB, not UART1; USB-to-UART
+	adapters instead reach whichever receiver UART they are wired to. The host
+	device name alone does not establish the receiver-side interface.
+- Select `Stop recording` to download the completed `.ubx` file.
+- Select `Replay .ubx` to open the playback controls for play/pause, speed and seeking.
+	The `1x` rate is estimated from the selected receiver baud rate.
+
+The `.ubx` capture contains the raw bytes received from the serial port. It preserves
+message order and content, but not the original host-side timing between serial reads.
+
+OSNMA display:
+- Receiver status uses green for working, yellow for waiting and red for errors.
+- Last update becomes yellow after 40 seconds without SEC-OSNMA and red after 60.
+- Time-sync requirement, its time difference, TESLA key, and timing-parameter results
+	stay green across idle reports for 60 seconds after a successful result. TESLA
+	authentication-in-progress reports also retain the last result. DSM results
+	stay green for 240 seconds. These expected intervals match the observed receiver
+	cadence; overdue results turn yellow. Explicit failures turn red immediately and
+	remain red until replaced by a new result. Missing SEC-OSNMA telemetry for more
+	than 40 seconds also turns otherwise-green periodic indicators yellow.
+- `Apply OSNMA offset & resend trusted UTC` adds the last passed receiver-reported
+	OSNMA time difference to the offset used for the accepted trusted UTC input,
+	sends the adjusted UTC as new trusted-time assistance, and updates app UTC only
+	if the receiver acknowledges it. Windows time is unchanged; app correction
+	resets on disconnect or replay. Receiver configuration must first send accepted
+	computer UTC assistance with the time-sync requirement enabled.
+- Each accepted assistance message requires an observed non-completed time-sync
+	status followed by an authenticated passed check before correction is available.
+	That result remains usable between authentication epochs, without a check-age
+	timeout, while the receiver continues reporting healthy live status. Explicit
+	errors, a later failed check, telemetry older than 40 seconds, replay or disconnect
+	block correction. Sending consumes the baseline until another check completes;
+	a failed send invalidates it and requires configuration again.
+- The signed difference is added as requested; its sign convention is not specified
+	in the supplied documentation. Verify that the next completed check moves toward
+	zero before repeating. Latency, trusted-time uncertainty and propagation can
+	affect the result, and an older offset cannot account for later computer-clock
+	drift or clock steps; this is not a precision clock guarantee.
+- Normal receiver configuration still sends raw computer UTC, not adjusted app UTC.
+	The displayed receiver time difference remains unchanged until a check is reported.
+
+Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
+
+
+Usage:
+- App runs in  Bokeh (Tornado) server, and renders in-browser
+
+Record directly from a serial port:
+`bokeh serve --show ubxScope.py --args --comport COM6 --baudrate 115200 --logfile logs/capture.ubx`
+
+Replay a saved capture:
+`bokeh serve --show ubxScope.py --args --file logs/capture.ubx`
+
+Expects a UBX stream on stdin.
+
+Read from a network socket:
+`nc 10.3.0.2 2001 | bokeh serve --show ubxScope.py`
+
+Read from a file, with rate limiting:
+`cat <file> | pv -L 3k | ....`
+
+Read from a serial port:
+```screen /dev/<console_port> 115200 | ....`
