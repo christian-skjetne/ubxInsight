@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const monCommsProbe = require("../tools/mon-comms-probe/probe.cjs");
+const monCommsProbePath = path.join(__dirname, "..", "tools", "mon-comms-probe", "probe.cjs");
+const monCommsProbe = fs.existsSync(monCommsProbePath) ? require(monCommsProbePath) : null;
 
 const source = fs.readFileSync(path.join(__dirname, "..", "scope.js"), "utf8").replace(/\r\n/g, "\n");
 
@@ -99,7 +100,7 @@ test("signal hover reports an empty frequency epoch as unavailable", () => {
   const canvas = { getBoundingClientRect: () => ({ left: 0 }), closest: () => ({ querySelector: () => readout }) };
   const context = loadFunctions(["updateSignalHover"], {
     signalChartState: new Map([[canvas, { series: [{ label: "Jammed frequency", color: "red", values: [{ epoch: 2, value: null }] }], box: { x: 0, width: 100 }, firstEpoch: 1, lastEpoch: 2 }]]),
-    signalHover: new Map(), window: { devicePixelRatio: 1 }, drawSignals() {},
+    signalHover: new Map(), signalHoverPinned: new Set(), window: { devicePixelRatio: 1 }, drawSignals() {},
   });
   context.updateSignalHover(canvas, { clientX: 100 });
   assert.match(readout.innerHTML, /Jammed frequency: n\/a/);
@@ -164,7 +165,7 @@ test("interface detection polls MON-COMMS and displays its parsed result", async
   assert.equal(context.receiverInterface.textContent, "Interface: USB");
 });
 
-test("Node MON-COMMS probe decodes bidirectional activity and split UBX frames", () => {
+test("Node MON-COMMS probe decodes bidirectional activity and split UBX frames", { skip: !monCommsProbe }, () => {
   const payload = Buffer.alloc(8 + 2 * 40);
   payload[0] = 0; payload[1] = 2;
   const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
@@ -471,4 +472,116 @@ test("UTC capture includes signed nanoseconds and excludes unresolved or replay 
   context.replayData = {};
   context.updateReceiverStatus(fix);
   assert.equal(context.latestReceiverUtc, null);
+});
+
+test("waterfall cursor maps pointer rows through the timestamp ring buffer", () => {
+  const context = loadFunctions(["waterfallCursorAt", "waterfallCursorDetails"], {
+    Date,
+  });
+  const timestamp = new Date(2026, 9, 18, 12, 34, 56).getTime();
+  const view = {
+    rowCount: 4, waterfallFrame: 12, filledRows: 3, row: 0,
+    timestamps: new Float64Array([0, 0, timestamp, 0]),
+    waterfallCursor: { frame: 10 },
+  };
+  const box = { x: 20, y: 10, width: 80, height: 40 };
+  assert.equal(context.waterfallCursorAt(view, 60, 115, 0, 100, 1, box), 11);
+  assert.equal(context.waterfallCursorAt(view, 60, 145, 0, 100, 1, box), null);
+  assert.equal(context.waterfallCursorAt(view, 10, 115, 0, 100, 1, box), null);
+  assert.equal(context.waterfallCursorDetails(view).age, 1);
+  assert.equal(context.waterfallCursorDetails(view).label, "12:34:56");
+});
+
+test("waterfall cursor draws a horizontal line labeled with the selected row time", () => {
+  const labels = [];
+  const positions = [];
+  const drawing = new Proxy({
+    moveTo(x, y) { positions.push([x, y]); },
+    lineTo(x, y) { positions.push([x, y]); },
+    fillText(text, x, y) { labels.push([text, x, y]); },
+  }, { get(target, property) { return target[property] ?? (() => {}); } });
+  const context = loadFunctions(["waterfallCursorDetails", "drawWaterfallCursor"], {
+    window: { devicePixelRatio: 1 }, Date,
+  });
+  const view = {
+    rowCount: 4, waterfallFrame: 12, filledRows: 3, row: 0,
+    timestamps: new Float64Array([0, 0, new Date(2026, 9, 18, 12, 34, 56).getTime(), 0]),
+    waterfallCursor: { frame: 10, pinned: true },
+  };
+  const box = { x: 20, y: 10, width: 80, height: 40 };
+  context.drawWaterfallCursor(drawing, view, box);
+  assert.equal(labels[0][0], "12:34:56");
+  assert.equal(labels[0][2], 25);
+  assert.deepEqual(positions, [[20, 25], [100, 25]]);
+});
+
+test("pinned waterfall cursor stays on its frame and clears explicitly", () => {
+  let selectedFrame = 8;
+  let draws = 0;
+  const context = loadFunctions(["updateWaterfallHover", "pinWaterfallCursor", "clearWaterfallCursor"], {
+    PLOT_MARGIN: { left: 54, right: 14 }, window: { devicePixelRatio: 1 },
+    sizeCanvas: () => ({ width: 300, height: 200 }),
+    waterfallCursorAt: () => selectedFrame,
+    drawWaterfall() { draws += 1; },
+  });
+  const view = { frame: {}, waterfallCursor: null, waterfall: { getBoundingClientRect: () => ({ top: 0 }) } };
+  const firstMove = { clientY: 50 };
+  assert.equal(context.updateWaterfallHover(view, firstMove), true);
+  context.pinWaterfallCursor(view, firstMove);
+  assert.equal(view.waterfallCursor.frame, 8);
+  assert.equal(view.waterfallCursor.pinned, true);
+  selectedFrame = 7;
+  assert.equal(context.updateWaterfallHover(view, { clientY: 70 }), false);
+  assert.equal(view.waterfallCursor.frame, 8);
+  context.clearWaterfallCursor(view);
+  assert.equal(view.waterfallCursor, null);
+  assert.equal(draws, 3);
+});
+
+test("spectrum cursor can be cleared after it is pinned", () => {
+  let draws = 0;
+  const view = { hoverPinned: true, hoverBin: 12, inspect: { textContent: "pinned" } };
+  const context = loadFunctions(["clearSpectrumCursor"], { drawSpectrum() { draws += 1; } });
+  context.clearSpectrumCursor(view);
+  assert.equal(view.hoverPinned, false);
+  assert.equal(view.hoverBin, null);
+  assert.equal(view.inspect.textContent, "Move cursor over spectrum");
+  assert.equal(draws, 1);
+});
+
+test("spectrum cursor stays at its clicked bin until cleared", () => {
+  const view = {
+    hoverPinned: false, hoverBin: null, inspect: { textContent: "" },
+    spectrum: { width: 100, getBoundingClientRect: () => ({ left: 0 }) },
+    frame: { center: 1000, span: 100, bins: new Uint8Array(256), average: null }, peak: null,
+  };
+  const context = loadFunctions(["updateHover", "pinSpectrumCursor"], {
+    BIN_COUNT: 256, window: { devicePixelRatio: 1 }, plotBox: () => ({ x: 0, width: 100 }),
+    formatHz: String, drawSpectrum() {},
+  });
+  context.pinSpectrumCursor(view, { clientX: 20 });
+  const pinnedBin = view.hoverBin;
+  assert.equal(view.hoverPinned, true);
+  context.updateHover(view, { clientX: 80 });
+  assert.equal(view.hoverBin, pinnedBin);
+});
+
+test("signal chart cursor stays at its clicked epoch until cleared", () => {
+  const readout = { innerHTML: "", textContent: "" };
+  const canvas = { getBoundingClientRect: () => ({ left: 0 }), closest: () => ({ querySelector: () => readout }) };
+  const series = [{ label: "Jamming", color: "red", values: [{ epoch: 4, value: 1 }, { epoch: 5, value: 2 }, { epoch: 6, value: 3 }] }];
+  const signalHover = new Map();
+  const signalHoverPinned = new Set();
+  const context = loadFunctions(["updateSignalHover", "clearSignalHover"], {
+    signalChartState: new Map([[canvas, { series, box: { x: 0, width: 100 }, firstEpoch: 0, lastEpoch: 10 }]]),
+    signalHover, signalHoverPinned, window: { devicePixelRatio: 1 }, drawSignals() {},
+  });
+  assert.equal(context.updateSignalHover(canvas, { clientX: 50 }, true), true);
+  signalHoverPinned.add(canvas);
+  const pinnedEpoch = signalHover.get(canvas);
+  assert.equal(context.updateSignalHover(canvas, { clientX: 90 }), false);
+  assert.equal(signalHover.get(canvas), pinnedEpoch);
+  context.clearSignalHover(canvas);
+  assert.equal(signalHover.has(canvas), false);
+  assert.equal(signalHoverPinned.has(canvas), false);
 });

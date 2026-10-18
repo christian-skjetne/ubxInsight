@@ -4,7 +4,7 @@ Requires an F9 or X20-series Ublox receiver.
 
 Browser app:
 - Serve this directory over localhost, for example: `python -m http.server 8765`
-- Open `http://localhost:8765/scope.html` in Chrome or Edge.
+- Open `scope.html` in Chrome or Edge.
 - The page can also be opened directly. In `file://` mode the map automatically
 	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
 - Connect the receiver and select `Start recording` to begin capturing raw bytes.
@@ -61,9 +61,4 @@ OSNMA display:
 
 Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 
-MON-COMMS live interface probe (Node.js): in `tools/mon-comms-probe`, run
-`npm install`, then `node probe.cjs COM5 38400` (replace the port and baud rate
-with the serial connection currently used by the receiver). Disconnect the
-browser app first so it releases the COM port. The probe prints the request,
-response payload, and RX/TX counters for every reported port.
 

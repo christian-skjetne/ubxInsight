@@ -180,6 +180,7 @@
   let signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 };
   const activeConstellations = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
   const signalHover = new WeakMap();
+  const signalHoverPinned = new WeakSet();
   const signalChartState = new WeakMap();
 
   const setStatus = (message) => { status.textContent = message; };
@@ -219,8 +220,9 @@
   function resetTraceBuffers() { blockViews.forEach((view) => { view.averageHistory = []; view.peak = null; }); }
   function resetWaterfallHistory() {
     blockViews.forEach((view) => {
-      view.rows.fill(0); view.row = 0; view.filledRows = 0; view.hasRows = false; view.waterfallFrame = 0;
+      view.rows.fill(0); view.timestamps.fill(0); view.row = 0; view.filledRows = 0; view.hasRows = false; view.waterfallFrame = 0;
       view.timestampMarkers = []; view.lastMarkerSlot = null; view.frame = null; view.averageHistory = []; view.peak = null;
+      view.waterfallCursor = null; view.hoverBin = null; view.hoverPinned = false;
       view.meta.textContent = "Awaiting MON-SPAN";
       for (const canvas of [view.spectrum, view.waterfall]) {
         const { width, height } = sizeCanvas(canvas); const context = canvas.getContext("2d");
@@ -247,6 +249,10 @@
     osnmaFrames.clear(); osnmaE1bFrameCount = 0; osnmaGalileoTime = null; latestOsnmaStatus = null; latestOsnmaTimeCheck = null; osnmaSatelliteResults.clear(); Object.keys(retainedOsnmaCodes).forEach((key) => { retainedOsnmaCodes[key] = null; }); osnmaTrustStatus.textContent = "Not loaded"; osnmaAuthStatus.textContent = "Not verified"; renderOsnma();
     signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 }; Object.assign(receiverThreat, { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null });
     signalsEmpty.hidden = false; secSecuritySummary.innerHTML = "<strong>SEC-SIG:</strong> awaiting X20 security data."; secEventLog.innerHTML = "<strong>SEC-SIGLOG:</strong> no events.";
+    Object.values(signalCharts).forEach((canvas) => {
+      signalHover.delete(canvas); signalHoverPinned.delete(canvas);
+      if (!inspectionDisabledCharts.has(canvas)) canvas.closest(".signal-plot").querySelector(".chart-inspect").textContent = "Move cursor over chart to inspect values.";
+    });
     drawSignals();
     const { width: trackWidth, height: trackHeight } = sizeCanvas(positionTrack); const trackContext = positionTrack.getContext("2d"); trackContext.fillStyle = "#090c12"; trackContext.fillRect(0, 0, trackWidth, trackHeight);
     fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
@@ -262,9 +268,15 @@
     const rowCount = settings.waterfallMinutes * WATERFALL_ROWS_PER_MINUTE;
     const waterfall = section.querySelector(".waterfall");
     waterfall.style.height = `${settings.waterfallMinutes * 80}px`;
-    const view = { section, spectrum, waterfall, meta: section.querySelector(".meta"), inspect: section.querySelector(".inspect"), rows: new Uint8Array(rowCount * BIN_COUNT), rowCount, row: 0, filledRows: 0, hasRows: false, waterfallFrame: 0, timestampMarkers: [], lastMarkerSlot: null, frame: null, averageHistory: [], peak: null, hoverBin: null };
+    const view = { section, spectrum, waterfall, meta: section.querySelector(".meta"), inspect: section.querySelector(".inspect"), rows: new Uint8Array(rowCount * BIN_COUNT), timestamps: new Float64Array(rowCount), rowCount, row: 0, filledRows: 0, hasRows: false, waterfallFrame: 0, timestampMarkers: [], lastMarkerSlot: null, frame: null, averageHistory: [], peak: null, hoverBin: null, hoverPinned: false, waterfallCursor: null };
     spectrum.addEventListener("pointermove", (event) => updateHover(view, event));
-    spectrum.addEventListener("pointerleave", () => { view.hoverBin = null; view.inspect.textContent = "Move cursor over spectrum"; drawSpectrum(view); });
+    spectrum.addEventListener("pointerleave", () => { if (!view.hoverPinned) clearSpectrumCursor(view); });
+    spectrum.addEventListener("click", (event) => { if (event.button === 0) pinSpectrumCursor(view, event); });
+    spectrum.addEventListener("contextmenu", (event) => { event.preventDefault(); clearSpectrumCursor(view); });
+    waterfall.addEventListener("pointermove", (event) => updateWaterfallHover(view, event));
+    waterfall.addEventListener("pointerleave", () => { if (!view.waterfallCursor?.pinned) clearWaterfallCursor(view); });
+    waterfall.addEventListener("click", (event) => { if (event.button === 0) pinWaterfallCursor(view, event); });
+    waterfall.addEventListener("contextmenu", (event) => { event.preventDefault(); clearWaterfallCursor(view); });
     new ResizeObserver(() => draw(view)).observe(section);
     return view;
   }
@@ -351,16 +363,30 @@
     }
   }
 
-  function updateHover(view, event) {
+  function updateHover(view, event, force = false) {
     if (!view.frame) return;
+    if (view.hoverPinned && !force) return;
     const bounds = view.spectrum.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; const box = plotBox(view.spectrum.width, view.spectrum.height); const x = (event.clientX - bounds.left) * dpr;
-    if (x < box.x || x > box.x + box.width) { if (view.hoverBin !== null) { view.hoverBin = null; view.inspect.textContent = "Move cursor over spectrum"; drawSpectrum(view); } return; }
+    if (x < box.x || x > box.x + box.width) { if (view.hoverBin !== null) { view.hoverBin = null; view.inspect.textContent = "Move cursor over spectrum"; drawSpectrum(view); } return false; }
     const bin = Math.max(0, Math.min(BIN_COUNT - 1, Math.round((x - box.x) / box.width * (BIN_COUNT - 1))));
     view.hoverBin = bin;
     const frequency = view.frame.center - view.frame.span / 2 + (bin + .5) / BIN_COUNT * view.frame.span;
     const average = view.frame.average ? ` | Avg ${view.frame.average[bin].toFixed(1)} dB` : "";
     const peak = view.peak ? ` | Peak ${view.peak[bin].toFixed(1)} dB` : "";
     view.inspect.textContent = `${formatHz(frequency)} | PSD ${view.frame.bins[bin]} dB${average}${peak}`;
+    drawSpectrum(view);
+    return true;
+  }
+
+  function pinSpectrumCursor(view, event) {
+    view.hoverPinned = false;
+    view.hoverPinned = updateHover(view, event, true) === true;
+  }
+
+  function clearSpectrumCursor(view) {
+    view.hoverPinned = false;
+    view.hoverBin = null;
+    view.inspect.textContent = "Move cursor over spectrum";
     drawSpectrum(view);
   }
 
@@ -388,6 +414,63 @@
     drawBandMarkers(context, view.frame, box);
     drawWaterfallAxes(context, view.frame, box);
     drawWaterfallTimestampMarkers(context, view, box);
+    drawWaterfallCursor(context, view, box);
+  }
+
+  function waterfallCursorAt(view, clientX, clientY, boundsLeft, boundsTop, dpr, box) {
+    const x = (clientX - boundsLeft) * dpr;
+    const y = (clientY - boundsTop) * dpr;
+    if (x < box.x || x >= box.x + box.width) return null;
+    if (y < box.y || y >= box.y + box.height) return null;
+    const age = Math.floor((y - box.y) / box.height * view.rowCount);
+    if (age >= view.filledRows) return null;
+    return view.waterfallFrame - 1 - age;
+  }
+
+  function waterfallCursorDetails(view) {
+    if (!view.waterfallCursor) return null;
+    const age = view.waterfallFrame - 1 - view.waterfallCursor.frame;
+    if (age < 0 || age >= view.filledRows) return null;
+    const row = (view.row - 1 - age + view.rowCount) % view.rowCount;
+    const timestamp = view.timestamps[row];
+    return { age, label: timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }) : `-${age}s` };
+  }
+
+  function drawWaterfallCursor(context, view, box) {
+    const details = waterfallCursorDetails(view);
+    if (!details) { view.waterfallCursor = null; return; }
+    const dpr = window.devicePixelRatio || 1;
+    const y = box.y + (details.age + 0.5) / view.rowCount * box.height;
+    context.save();
+    context.strokeStyle = "#ffffff"; context.fillStyle = "#ffffff"; context.globalAlpha = 0.9; context.lineWidth = dpr;
+    context.setLineDash([3 * dpr, 3 * dpr]); context.beginPath(); context.moveTo(box.x, y); context.lineTo(box.x + box.width, y); context.stroke();
+    context.setLineDash([]); context.font = `${11 * dpr}px "Segoe UI", sans-serif`; context.textAlign = "right"; context.textBaseline = "middle";
+    context.fillText(details.label, box.x - 7 * dpr, y);
+    context.restore();
+  }
+
+  function updateWaterfallHover(view, event, force = false) {
+    if (!view.frame || (view.waterfallCursor?.pinned && !force)) return false;
+    const { width, height } = sizeCanvas(view.waterfall); const dpr = window.devicePixelRatio || 1;
+    const box = { x: PLOT_MARGIN.left * dpr, y: 12 * dpr, width: width - (PLOT_MARGIN.left + PLOT_MARGIN.right) * dpr, height: height - 42 * dpr };
+    const bounds = view.waterfall.getBoundingClientRect();
+    const frame = waterfallCursorAt(view, event.clientX, event.clientY, bounds.left, bounds.top, dpr, box);
+    if (frame === null) {
+      if (!view.waterfallCursor?.pinned || force) { view.waterfallCursor = null; drawWaterfall(view); }
+      return false;
+    }
+    view.waterfallCursor = { frame, pinned: false };
+    drawWaterfall(view);
+    return true;
+  }
+
+  function pinWaterfallCursor(view, event) {
+    if (updateWaterfallHover(view, event, true)) view.waterfallCursor.pinned = true;
+  }
+
+  function clearWaterfallCursor(view) {
+    view.waterfallCursor = null;
+    drawWaterfall(view);
   }
 
   function drawWaterfallAxes(context, frame, box) {
@@ -482,12 +565,13 @@
     context.restore();
   }
 
-  function updateSignalHover(canvas, event) {
+  function updateSignalHover(canvas, event, force = false) {
+    if (signalHoverPinned.has(canvas) && !force) return false;
     const state = signalChartState.get(canvas);
-    if (!state || !state.series.length) return;
+    if (!state || !state.series.length) return false;
     const bounds = canvas.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
     const x = (event.clientX - bounds.left) * dpr;
-    if (x < state.box.x || x > state.box.x + state.box.width) return;
+    if (x < state.box.x || x > state.box.x + state.box.width) return false;
     const epoch = Math.round(state.firstEpoch + (x - state.box.x) / state.box.width * (state.lastEpoch - state.firstEpoch));
     signalHover.set(canvas, epoch);
     const readout = canvas.closest(".signal-plot").querySelector(".chart-inspect");
@@ -497,10 +581,12 @@
     });
     readout.innerHTML = `Epoch ${epoch < 0 ? "n/a" : epoch} | ${values.join(" | ")}`;
     drawSignals();
+    return true;
   }
 
   function clearSignalHover(canvas) {
     signalHover.delete(canvas);
+    signalHoverPinned.delete(canvas);
     canvas.closest(".signal-plot").querySelector(".chart-inspect").textContent = "Move cursor over chart to inspect values.";
     drawSignals();
   }
@@ -563,7 +649,9 @@
     canvas.closest(".signal-plot").querySelector("header").after(inspectStrip);
     if (inspectionDisabledCharts.has(canvas)) { canvas.classList.add("inspection-disabled"); return; }
     canvas.addEventListener("pointermove", (event) => updateSignalHover(canvas, event));
-    canvas.addEventListener("pointerleave", () => clearSignalHover(canvas));
+    canvas.addEventListener("pointerleave", () => { if (!signalHoverPinned.has(canvas)) clearSignalHover(canvas); });
+    canvas.addEventListener("click", (event) => { if (event.button === 0 && updateSignalHover(canvas, event, true)) signalHoverPinned.add(canvas); });
+    canvas.addEventListener("contextmenu", (event) => { event.preventDefault(); clearSignalHover(canvas); });
   });
 
   function latLonToUtm33(latitude, longitude) {
@@ -1372,7 +1460,7 @@
         view.lastMarkerSlot = markerSlot;
       }
       view.timestampMarkers = view.timestampMarkers.filter((marker) => view.waterfallFrame - marker.frame < view.rowCount);
-      view.frame = { center, span, pga, bins, average }; view.rows.set(bins, view.row * BIN_COUNT); view.row = (view.row + 1) % view.rowCount; view.filledRows = Math.min(view.rowCount, view.filledRows + 1); if (view.row === 0) view.hasRows = true; view.waterfallFrame += 1; view.meta.textContent = `${formatHz(center - span / 2)} - ${formatHz(center + span / 2)} | span ${formatHz(span)} | PGA ${pga}dB`; scheduleViewDraw(view);
+      view.frame = { center, span, pga, bins, average }; view.rows.set(bins, view.row * BIN_COUNT); view.timestamps[view.row] = now.getTime(); view.row = (view.row + 1) % view.rowCount; view.filledRows = Math.min(view.rowCount, view.filledRows + 1); if (view.row === 0) view.hasRows = true; view.waterfallFrame += 1; view.meta.textContent = `${formatHz(center - span / 2)} - ${formatHz(center + span / 2)} | span ${formatHz(span)} | PGA ${pga}dB`; scheduleViewDraw(view);
       latestPga[index] = pga;
     }
     if (signalHistory.pga.length && !replayRebuilding) drawSignals();

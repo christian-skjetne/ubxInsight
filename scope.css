@@ -44,7 +44,7 @@ main { width: 100%; margin: 0; padding: 12px; }
 .inspect { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 canvas { display: block; width: 100%; background: #090c12; }
 .spectrum { height: clamp(360px, 38vh, 560px); border-bottom: 1px solid var(--line); cursor: crosshair; }
-.waterfall { height: 440px; image-rendering: pixelated; }
+.waterfall { height: 440px; image-rendering: pixelated; cursor: crosshair; }
 #position-views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .position-view { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .position-view header { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
