@@ -105,6 +105,9 @@
   let trustedClockUpdatePending = false;
   const positionEmpty = document.querySelector("#position-empty");
   const positionTrack = document.querySelector("#position-track");
+  const positionRecenter = document.querySelector("#position-recenter");
+  const positionZoomIn = document.querySelector("#position-zoom-in");
+  const positionZoomOut = document.querySelector("#position-zoom-out");
   const positionInfo = document.querySelector("#position-info");
   const signalsEmpty = document.querySelector("#signals-empty");
   const constellationFilter = document.querySelector("#constellation-filter");
@@ -227,6 +230,7 @@
   function resetReplayDerivedViews(removeMaps = true) {
     resetLocalClock();
     resetWaterfallHistory(); positionFixes = []; positionView = null; positionDrag = null; positionEmpty.hidden = false; positionInfo.textContent = "No position data.";
+    positionRecenter.disabled = true; positionZoomIn.disabled = true; positionZoomOut.disabled = true;
     if (removeMaps) {
       if (positionMap) positionMap.remove(); if (mapLibreMap) mapLibreMap.remove();
       positionMap = null; mapLibreMap = null; mapTiles = null; mapTrack = null; mapTrackSegments = []; mapMarker = null;
@@ -558,8 +562,7 @@
     const scale = Math.min((width - 2 * padding) / positionView.span, (height - 2 * padding) / positionView.span);
     const toCanvas = (fix) => ({ x: width / 2 + (fix.easting - positionView.centerEasting) * scale, y: height / 2 - (fix.northing - positionView.centerNorthing) * scale });
     context.fillStyle = "#090c12"; context.fillRect(0, 0, width, height);
-    context.strokeStyle = "#293447"; context.lineWidth = window.devicePixelRatio || 1;
-    for (let division = 0; division <= 4; division++) { const x = padding + division / 4 * (width - 2 * padding); const y = padding + division / 4 * (height - 2 * padding); context.beginPath(); context.moveTo(x, padding); context.lineTo(x, height - padding); context.moveTo(padding, y); context.lineTo(width - padding, y); context.stroke(); }
+    drawPositionGrid(context, width, height, padding, positionView, scale);
     context.lineWidth = 2 * (window.devicePixelRatio || 1);
     for (let index = 1; index < positionFixes.length; index++) {
       const previous = toCanvas(positionFixes[index - 1]); const current = toCanvas(positionFixes[index]);
@@ -568,6 +571,43 @@
     const latest = toCanvas(positionFixes[positionFixes.length - 1]); context.fillStyle = "#ff7262"; context.beginPath(); context.arc(latest.x, latest.y, 5 * (window.devicePixelRatio || 1), 0, Math.PI * 2); context.fill();
     context.fillStyle = "#9ba8bc"; context.font = `${11 * (window.devicePixelRatio || 1)}px "Segoe UI", sans-serif`; context.fillText("UTM33N", padding, 18 * (window.devicePixelRatio || 1));
     drawScaleBar(context, width, height, padding, scale);
+  }
+
+  function positionGridInterval(pixelsPerMetre, dpr = window.devicePixelRatio || 1) {
+    const targetMetres = 80 * dpr / pixelsPerMetre;
+    const magnitude = 10 ** Math.floor(Math.log10(targetMetres));
+    return [magnitude, 5 * magnitude, 10 * magnitude].find((interval) => interval >= targetMetres) || 10 * magnitude;
+  }
+
+  function drawPositionGrid(context, width, height, padding, view, scale) {
+    const dpr = window.devicePixelRatio || 1;
+    const interval = positionGridInterval(scale, dpr);
+    const halfWidthMetres = (width / 2 - padding) / scale;
+    const halfHeightMetres = (height / 2 - padding) / scale;
+    const firstEasting = Math.ceil((view.centerEasting - halfWidthMetres) / interval) * interval;
+    const lastEasting = view.centerEasting + halfWidthMetres;
+    const firstNorthing = Math.ceil((view.centerNorthing - halfHeightMetres) / interval) * interval;
+    const lastNorthing = view.centerNorthing + halfHeightMetres;
+    context.save();
+    context.strokeStyle = "#293447";
+    context.lineWidth = dpr;
+    context.beginPath();
+    for (let easting = firstEasting; easting <= lastEasting; easting += interval) {
+      const x = width / 2 + (easting - view.centerEasting) * scale;
+      context.moveTo(x, padding); context.lineTo(x, height - padding);
+    }
+    for (let northing = firstNorthing; northing <= lastNorthing; northing += interval) {
+      const y = height / 2 - (northing - view.centerNorthing) * scale;
+      context.moveTo(padding, y); context.lineTo(width - padding, y);
+    }
+    context.stroke();
+    const intervalLabel = interval >= 1000 ? `${interval / 1000} km` : `${interval} m`;
+    context.fillStyle = "#9ba8bc";
+    context.font = `${11 * dpr}px "Segoe UI", sans-serif`;
+    context.textAlign = "left";
+    context.textBaseline = "top";
+    context.fillText(`UTM33N | Grid ${intervalLabel}`, padding, 10 * dpr);
+    context.restore();
   }
 
   function drawScaleBar(context, width, height, padding, pixelsPerMetre) {
@@ -589,6 +629,21 @@
     const eastings = positionFixes.map((fix) => fix.easting);
     const northings = positionFixes.map((fix) => fix.northing);
     positionView = { centerEasting: (Math.min(...eastings) + Math.max(...eastings)) / 2, centerNorthing: (Math.min(...northings) + Math.max(...northings)) / 2, span: Math.max(Math.max(...eastings) - Math.min(...eastings), Math.max(...northings) - Math.min(...northings), 20) * 1.2 };
+    drawPositionTrack();
+  }
+
+  function recenterPositionTrack() {
+    if (!positionFixes.length) return;
+    if (!positionView) resetPositionView();
+    const latest = positionFixes[positionFixes.length - 1];
+    positionView.centerEasting = latest.easting;
+    positionView.centerNorthing = latest.northing;
+    drawPositionTrack();
+  }
+
+  function zoomPositionTrack(factor) {
+    if (!positionView || !positionFixes.length) return;
+    positionView.span = Math.max(1, Math.min(1e7, positionView.span * factor));
     drawPositionTrack();
   }
 
@@ -631,6 +686,9 @@
   positionTrack.addEventListener("pointerup", () => { positionDrag = null; });
   positionTrack.addEventListener("pointercancel", () => { positionDrag = null; });
   positionTrack.addEventListener("dblclick", resetPositionView);
+  positionRecenter.addEventListener("click", recenterPositionTrack);
+  positionZoomIn.addEventListener("click", () => zoomPositionTrack(0.8));
+  positionZoomOut.addEventListener("click", () => zoomPositionTrack(1.25));
 
   function updatePositionMap(fix, droppedOldestFix = false) {
     if (settings.darkMap || location.protocol === "file:") { updateVectorPositionMap(fix); return; }
@@ -745,6 +803,7 @@
     const fix = { latitude, longitude, fixType, satellites, time, threatLevel, threatColor, ...utm };
     const droppedOldestFix = positionFixes.length === 3600;
     positionFixes.push(fix); if (positionFixes.length > 3600) positionFixes.shift();
+    positionRecenter.disabled = false; positionZoomIn.disabled = false; positionZoomOut.disabled = false;
     positionEmpty.hidden = true;
     positionInfo.innerHTML = `<strong>Latitude:</strong> ${latitude.toFixed(6)}&deg; &nbsp; <strong>Longitude:</strong> ${longitude.toFixed(6)}&deg; &nbsp; <strong>Fix:</strong> ${fixNames[fixType] || `Fix ${fixType}`} &nbsp; <strong>SVs:</strong> ${satellites} &nbsp; <strong>Time:</strong> ${time} &nbsp; <a href="https://www.google.com/maps?q=${latitude.toFixed(6)},${longitude.toFixed(6)}" target="_blank">Open in Maps</a>`;
     if (!replayRebuilding && !positionPanel.hidden) { drawPositionTrack(); updatePositionMap(fix, droppedOldestFix); }

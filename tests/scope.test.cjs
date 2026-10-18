@@ -60,8 +60,11 @@ test("map accepts only valid position fixes", () => {
   let trackDraws = 0;
   let mapUpdates = 0;
   const positionPanel = { hidden: true };
+  const positionRecenter = { disabled: true };
+  const positionZoomIn = { disabled: true };
+  const positionZoomOut = { disabled: true };
   const context = loadFunctions(["parseNavPvt"], {
-    DataView, positionFixes: [], positionEmpty: {}, positionInfo: {}, positionPanel,
+    DataView, positionFixes: [], positionEmpty: {}, positionInfo: {}, positionPanel, positionRecenter, positionZoomIn, positionZoomOut,
     receiverThreat: { monRfJam: 0, navSpoof: 0, secJam: 0, secSpoof: 0 }, replayRebuilding: false,
     latLonToUtm33: () => ({}), drawPositionTrack() { trackDraws += 1; }, updatePositionMap() { mapUpdates += 1; }, updateReceiverStatus() {},
   });
@@ -73,6 +76,9 @@ test("map accepts only valid position fixes", () => {
   }
   assert.equal(trackDraws, 0);
   assert.equal(mapUpdates, 0);
+  assert.equal(positionRecenter.disabled, false);
+  assert.equal(positionZoomIn.disabled, false);
+  assert.equal(positionZoomOut.disabled, false);
   positionPanel.hidden = false;
   context.parseNavPvt(Object.assign(new Uint8Array(92), { 20: 3, 21: 1 }));
   assert.equal(trackDraws, 1);
@@ -92,6 +98,37 @@ test("MapLibre track geometry stays bounded and includes the latest fix", () => 
   assert.equal(lines.features.length, 2);
   assert.ok(vertices.features.length <= 600);
   assert.deepEqual(Array.from(vertices.features.at(-1).geometry.coordinates), [3.599, 3.599]);
+});
+
+test("position controls recenter on the latest fix and clamp zoom", () => {
+  let draws = 0;
+  const context = loadFunctions(["recenterPositionTrack", "zoomPositionTrack"], {
+    positionFixes: [{ easting: 100, northing: 200 }],
+    positionView: { centerEasting: 0, centerNorthing: 0, span: 100 },
+    drawPositionTrack() { draws += 1; },
+  });
+  context.recenterPositionTrack();
+  assert.equal(context.positionView.centerEasting, 100);
+  assert.equal(context.positionView.centerNorthing, 200);
+  assert.equal(context.positionView.span, 100);
+  context.zoomPositionTrack(0.8);
+  assert.equal(context.positionView.span, 80);
+  context.positionView.span = 1;
+  context.zoomPositionTrack(0.8);
+  assert.equal(context.positionView.span, 1);
+  context.positionView.span = 1e7;
+  context.zoomPositionTrack(1.25);
+  assert.equal(context.positionView.span, 1e7);
+  assert.equal(draws, 4);
+});
+
+test("position grid interval follows the 1-5 metric sequence as zoom changes", () => {
+  const context = loadFunctions(["positionGridInterval"], { window: { devicePixelRatio: 1 } });
+  assert.deepEqual(
+    [80, 16, 8, 1.6, 0.8].map((scale) => context.positionGridInterval(scale)),
+    [1, 5, 10, 50, 100],
+  );
+  assert.equal(context.positionGridInterval(0.008), 10000);
 });
 
 test("OSNMA age boundaries and receiver state colors", () => {
