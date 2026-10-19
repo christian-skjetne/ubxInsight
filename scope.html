@@ -111,6 +111,19 @@
           <p>Enable the receiver’s strict OSNMA time-sync requirement only if this computer’s UTC is independently synchronized and within the stated uncertainty. This setting does not send time; use Send trusted time to send computer UTC. When off, the strict requirement is disabled.</p>
         </div>
       </details>
+      <section class="osnma-clock-display" aria-labelledby="osnma-clock-heading">
+        <header><h2 id="osnma-clock-heading">Receiver clock</h2><span id="osnma-clock-age" data-state="waiting">Waiting for receiver time</span></header>
+        <div class="osnma-clock-face">
+          <strong id="osnma-clock-value">Waiting for valid receiver UTC</strong>
+          <label><input id="osnma-clock-local-time" type="checkbox"> Show local time</label>
+        </div>
+        <div class="osnma-clock-evidence">
+          <div><span class="osnma-label">NAV-PVT time</span><strong id="osnma-clock-pvt" data-state="waiting">Waiting for NAV-PVT</strong></div>
+          <div><span class="osnma-label">NAV-TIMEUTC</span><strong id="osnma-clock-timeutc" data-state="waiting">Waiting for NAV-TIMEUTC</strong></div>
+          <div><span class="osnma-label">OSNMA time verification</span><strong id="osnma-clock-auth" data-state="waiting">Not verified</strong></div>
+        </div>
+        <p class="osnma-note">PVT/TIMEUTC validity, confirmation, and accuracy are receiver-reported, not cryptographic authentication. OSNMA verification is reported separately from SEC-OSNMA.</p>
+      </section>
       <section class="osnma-overview" aria-label="OSNMA readiness">
         <div><span class="osnma-label">OSNMA input</span><strong id="osnma-input-status">Waiting for Galileo E1-B data</strong></div>
         <div><span class="osnma-label">Galileo time</span><strong id="osnma-time-status">Waiting for NAV-TIMEGAL</strong></div>

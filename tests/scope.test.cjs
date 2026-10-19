@@ -254,7 +254,7 @@ test("map accepts only valid position fixes", () => {
   const context = loadFunctions(["parseNavPvt"], {
     DataView, positionFixes: [], positionEmpty: {}, positionInfo: {}, positionPanel, positionRecenter, positionZoomIn, positionZoomOut,
     receiverThreat: { monRfJam: 0, navSpoof: 0, secJam: 0, secSpoof: 0 }, replayRebuilding: false,
-    latLonToUtm33: () => ({}), drawPositionTrack() { trackDraws += 1; }, updatePositionMap() { mapUpdates += 1; }, updateReceiverStatus() {},
+    latLonToUtm33: () => ({}), drawPositionTrack() { trackDraws += 1; }, updatePositionMap() { mapUpdates += 1; }, updateReceiverStatus() {}, refreshOsnmaClock() {},
   });
   for (const [fixType, flags, pointCount] of [[0, 0, 0], [5, 1, 0], [3, 0, 0], [2, 1, 1], [3, 1, 2], [4, 1, 3]]) {
     const payload = new Uint8Array(92);
@@ -271,6 +271,61 @@ test("map accepts only valid position fixes", () => {
   context.parseNavPvt(Object.assign(new Uint8Array(92), { 20: 3, 21: 1 }));
   assert.equal(trackDraws, 1);
   assert.equal(mapUpdates, 1);
+});
+
+test("NAV-PVT clock parsing retains confirmation flags and time accuracy", () => {
+  const context = loadFunctions(["parseNavPvt"], { DataView, refreshOsnmaClock() {} });
+  const payload = new Uint8Array(92);
+  const data = new DataView(payload.buffer);
+  data.setUint16(4, 2026, true); payload[6] = 10; payload[7] = 19; payload[8] = 3; payload[9] = 4; payload[10] = 5;
+  payload[11] = 0x37; data.setUint32(12, 80, true); data.setInt32(16, -250000000, true); data.setInt32(24, 1810000000, true);
+  context.parseNavPvt(payload);
+  assert.equal(context.latestPvtClock.utcMs, Date.UTC(2026, 9, 19, 3, 4, 4, 750));
+  assert.equal(context.latestPvtClock.tAccNs, 80);
+  assert.equal(context.latestPvtClock.validDate, true);
+  assert.equal(context.latestPvtClock.validTime, true);
+  assert.equal(context.latestPvtClock.fullyResolved, true);
+  assert.equal(context.latestPvtClock.confirmedDate, true);
+  assert.equal(context.latestPvtClock.confirmedTime, true);
+});
+
+test("NAV-TIMEUTC parsing retains UTC validity and accuracy", () => {
+  const context = loadFunctions(["parseNavTimeUtc"], { DataView, refreshOsnmaClock() {} });
+  const payload = new Uint8Array(20);
+  const data = new DataView(payload.buffer);
+  data.setUint32(4, 125, true); data.setInt32(8, 500000000, true); data.setUint16(12, 2026, true);
+  payload[14] = 10; payload[15] = 19; payload[16] = 3; payload[17] = 4; payload[18] = 5; payload[19] = 0x07;
+  context.parseNavTimeUtc(payload);
+  assert.equal(context.latestTimeUtcClock.utcMs, Date.UTC(2026, 9, 19, 3, 4, 5, 500));
+  assert.equal(context.latestTimeUtcClock.tAccNs, 125);
+  assert.equal(context.latestTimeUtcClock.validTow, true);
+  assert.equal(context.latestTimeUtcClock.validWeek, true);
+  assert.equal(context.latestTimeUtcClock.validUtc, true);
+});
+
+test("OSNMA clock shows receiver freshness, local-time preference, and separate verification status", () => {
+  const now = 100000;
+  const state = () => ({ textContent: "", dataset: {} });
+  const context = loadFunctions(["refreshOsnmaClock"], {
+    latestPvtClock: { utcMs: Date.UTC(2026, 9, 19), receivedAt: now - 125, tAccNs: 80, validDate: true, validTime: true, fullyResolved: true, confirmedDate: true, confirmedTime: true },
+    latestTimeUtcClock: null, osnmaClockSettings: { showLocalTime: false },
+    osnmaClockValue: state(), osnmaClockAge: state(), osnmaClockPvt: state(), osnmaClockTimeUtc: state(), osnmaClockAuth: state(),
+    latestOsnmaStatus: { ...workingStatus(), receivedAt: now, connectionId: 1 },
+    latestOsnmaTimeCheck: { status: 3, authenticated: true }, liveConnectionId: 1,
+  });
+  context.refreshOsnmaClock(now);
+  assert.match(context.osnmaClockValue.textContent, /UTC$/);
+  assert.equal(context.osnmaClockAge.dataset.state, "good");
+  assert.match(context.osnmaClockAuth.textContent, /check passed/);
+  assert.equal(context.osnmaClockAuth.dataset.state, "good");
+  context.osnmaClockSettings.showLocalTime = true;
+  context.refreshOsnmaClock(now);
+  assert.match(context.osnmaClockValue.textContent, /local$/);
+  context.latestOsnmaStatus.timSyncStatus = 4;
+  context.latestOsnmaStatus.timingAuthResult = 2;
+  context.latestOsnmaTimeCheck.status = 4;
+  context.refreshOsnmaClock(now);
+  assert.equal(context.osnmaClockAuth.dataset.state, "bad");
 });
 
 test("MapLibre track geometry stays bounded and includes the latest fix", () => {
@@ -408,7 +463,7 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
     latestReceiverUtc: null, latestOsnmaStatus: workingStatus(), liveConnectionId: 1,
     trustedClockSample: sample, trustedClockUpdatePending: false,
     latestOsnmaTimeCheck: { differenceMs: -513, status: 3, receivedAt: 99000, trustedClockSample: sample, authenticated: true },
-    appClockOffsetMs: 0, osnmaUpdateLocalTime: {}, osnmaSendTrustedTime: {}, osnmaLocalTime: {}, clockOffset: {},
+    appClockOffsetMs: 0, osnmaUpdateLocalTime: {}, osnmaSendTrustedTime: {}, osnmaLocalTime: {}, clockOffset: {}, refreshOsnmaClock() {},
     configureButton: { disabled: false },
     osnmaClockSettings: { accuracySeconds: 1 }, setStatus() {},
     async sendMgaAssistance(payload, messageId) { sent.push({ payload, messageId }); return { accepted: true }; },

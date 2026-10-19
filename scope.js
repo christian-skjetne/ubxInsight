@@ -11,7 +11,7 @@
   const SETTINGS_KEY = "ubx-scope-settings-v1";
   const OSNMA_CLOCK_SETTINGS_KEY = "ubx-scope-osnma-clock-v1";
   const DEFAULT_SETTINGS = { configureAllInterfaces: false, showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: false, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
-  const DEFAULT_OSNMA_CLOCK_SETTINGS = { useComputerClock: false, accuracySeconds: 1 };
+  const DEFAULT_OSNMA_CLOCK_SETTINGS = { useComputerClock: false, accuracySeconds: 1, showLocalTime: false };
   const SPECTRUM_MIN_DB = 0;
   const SPECTRUM_MAX_DB = 240;
   const PLOT_MARGIN = { left: 54, right: 14, top: 16, bottom: 72 };
@@ -100,8 +100,16 @@
   const osnmaTrustedTimeStatus = document.querySelector("#osnma-trusted-time-status");
   const osnmaUpdateLocalTime = document.querySelector("#osnma-update-local-time");
   const osnmaLocalTime = document.querySelector("#osnma-local-time");
+  const osnmaClockValue = document.querySelector("#osnma-clock-value");
+  const osnmaClockAge = document.querySelector("#osnma-clock-age");
+  const osnmaClockPvt = document.querySelector("#osnma-clock-pvt");
+  const osnmaClockTimeUtc = document.querySelector("#osnma-clock-timeutc");
+  const osnmaClockAuth = document.querySelector("#osnma-clock-auth");
+  const osnmaClockLocalTime = document.querySelector("#osnma-clock-local-time");
   let appClockOffsetMs = 0;
   let latestReceiverUtc = null;
+  let latestPvtClock = null;
+  let latestTimeUtcClock = null;
   let liveConnectionId = 0;
   let trustedClockSample = null;
   let trustedClockUpdatePending = false;
@@ -204,18 +212,20 @@
     try {
       const saved = JSON.parse(localStorage.getItem(OSNMA_CLOCK_SETTINGS_KEY));
       const accuracy = Number(saved?.accuracySeconds);
-      return { useComputerClock: saved?.useComputerClock === true, accuracySeconds: Number.isFinite(accuracy) && accuracy >= 1 ? Math.min(60, Math.round(accuracy)) : DEFAULT_OSNMA_CLOCK_SETTINGS.accuracySeconds };
+      return { useComputerClock: saved?.useComputerClock === true, accuracySeconds: Number.isFinite(accuracy) && accuracy >= 1 ? Math.min(60, Math.round(accuracy)) : DEFAULT_OSNMA_CLOCK_SETTINGS.accuracySeconds, showLocalTime: saved?.showLocalTime === true };
     } catch { return { ...DEFAULT_OSNMA_CLOCK_SETTINGS }; }
   }
 
   function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* Session-only settings when storage is unavailable. */ } }
   function saveOsnmaClockSettings() { try { localStorage.setItem(OSNMA_CLOCK_SETTINGS_KEY, JSON.stringify(osnmaClockSettings)); } catch { /* Session-only OSNMA time setting when storage is unavailable. */ } }
-  function syncOsnmaClockForm() { osnmaTrustComputerClock.checked = osnmaClockSettings.useComputerClock; osnmaClockAccuracy.value = String(osnmaClockSettings.accuracySeconds); osnmaClockAccuracy.disabled = !osnmaClockSettings.useComputerClock; }
+  function syncOsnmaClockForm() { osnmaTrustComputerClock.checked = osnmaClockSettings.useComputerClock; osnmaClockAccuracy.value = String(osnmaClockSettings.accuracySeconds); osnmaClockAccuracy.disabled = !osnmaClockSettings.useComputerClock; osnmaClockLocalTime.checked = osnmaClockSettings.showLocalTime; }
   function updateOsnmaClockSettings() {
     osnmaClockSettings.useComputerClock = osnmaTrustComputerClock.checked;
     const value = Number(osnmaClockAccuracy.value);
     osnmaClockSettings.accuracySeconds = Number.isFinite(value) ? Math.max(1, Math.min(60, Math.round(value))) : DEFAULT_OSNMA_CLOCK_SETTINGS.accuracySeconds;
+    osnmaClockSettings.showLocalTime = osnmaClockLocalTime.checked;
     syncOsnmaClockForm(); saveOsnmaClockSettings(); refreshLocalClock();
+    refreshOsnmaClock();
   }
   function syncReceiverBaud() { baud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); }
   function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
@@ -979,13 +989,16 @@
     const altitudeMetres = data.getInt32(36, true) / 1000;
     const groundSpeedMetresPerSecond = data.getInt32(60, true) / 1000;
     const headingDegrees = data.getInt32(64, true) / 1e5;
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
     const fixNames = ["No fix", "Dead reckoning", "2D fix", "3D fix", "GNSS + DR", "Time only"];
     const fixType = payload[20]; const satellites = payload[23];
     const year = data.getUint16(4, true); const month = payload[6]; const day = payload[7]; const hour = payload[8]; const minute = payload[9]; const second = payload[10];
+    const valid = payload[11]; const nano = data.getInt32(16, true); const receivedAt = Date.now();
+    latestPvtClock = { utcMs: Date.UTC(year, month - 1, day, hour, minute, second) + nano / 1e6, nano, tAccNs: data.getUint32(12, true), receivedAt, validDate: Boolean(valid & 0x01), validTime: Boolean(valid & 0x02), fullyResolved: Boolean(valid & 0x04), confirmedDate: Boolean(valid & 0x10), confirmedTime: Boolean(valid & 0x20) };
+    refreshOsnmaClock(receivedAt);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
     const time = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
     const positionValid = Boolean(payload[21] & 0x01) && [2, 3, 4].includes(fixType);
-    updateReceiverStatus({ latitude, longitude, fixType, satellites, time, year, month, day, hour, minute, second, nano: data.getInt32(16, true), altitudeMetres, groundSpeedMetresPerSecond, headingDegrees, valid: payload[11], positionValid });
+    updateReceiverStatus({ latitude, longitude, fixType, satellites, time, year, month, day, hour, minute, second, nano, altitudeMetres, groundSpeedMetresPerSecond, headingDegrees, valid, positionValid });
     if (!positionValid) return;
     const utm = latLonToUtm33(latitude, longitude);
     const threatLevel = Math.max(receiverThreat.monRfJam, receiverThreat.navSpoof, receiverThreat.secJam, receiverThreat.secSpoof);
@@ -997,6 +1010,15 @@
     positionEmpty.hidden = true;
     positionInfo.innerHTML = `<strong>Latitude:</strong> ${latitude.toFixed(6)}&deg; &nbsp; <strong>Longitude:</strong> ${longitude.toFixed(6)}&deg; &nbsp; <strong>Fix:</strong> ${fixNames[fixType] || `Fix ${fixType}`} &nbsp; <strong>SVs:</strong> ${satellites} &nbsp; <strong>Time:</strong> ${time} &nbsp; <a href="https://www.google.com/maps?q=${latitude.toFixed(6)},${longitude.toFixed(6)}" target="_blank">Open in Maps</a>`;
     if (!replayRebuilding && !positionPanel.hidden) { drawPositionTrack(); updatePositionMap(fix, droppedOldestFix); }
+  }
+
+  function parseNavTimeUtc(payload) {
+    if (payload.length < 20) return;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const valid = payload[19]; const year = data.getUint16(12, true); const month = payload[14]; const day = payload[15];
+    const hour = payload[16]; const minute = payload[17]; const second = payload[18]; const nano = data.getInt32(8, true); const receivedAt = Date.now();
+    latestTimeUtcClock = { utcMs: Date.UTC(year, month - 1, day, hour, minute, second) + nano / 1e6, nano, tAccNs: data.getUint32(4, true), receivedAt, validTow: Boolean(valid & 0x01), validWeek: Boolean(valid & 0x02), validUtc: Boolean(valid & 0x04) };
+    refreshOsnmaClock(receivedAt);
   }
 
   function updateReceiverStatus(fix) {
@@ -1023,6 +1045,49 @@
     altitudeStatus.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">terrain</span>${fix.altitudeMetres.toFixed(1)} m`;
     speedStatus.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">speed</span>${(fix.groundSpeedMetresPerSecond * 3.6).toFixed(1)} km/h`;
     headingStatus.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">navigation</span>${((fix.headingDegrees % 360) + 360).toFixed(1)}°`;
+  }
+
+  function refreshOsnmaClock(now = Date.now()) {
+    const source = [latestPvtClock?.validDate && latestPvtClock.validTime ? { ...latestPvtClock, source: "NAV-PVT" } : null, latestTimeUtcClock?.validUtc ? { ...latestTimeUtcClock, source: "NAV-TIMEUTC" } : null]
+      .filter(Boolean).sort((left, right) => right.receivedAt - left.receivedAt)[0];
+    const age = source ? Math.max(0, now - source.receivedAt) : null;
+    const fresh = age !== null && age <= 2500;
+    if (!source) osnmaClockValue.textContent = "Waiting for valid receiver UTC";
+    else {
+      const clockMs = source.utcMs + (fresh ? age : 0);
+      const date = new Date(clockMs);
+      const options = { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23" };
+      if (!osnmaClockSettings.showLocalTime) options.timeZone = "UTC";
+      osnmaClockValue.textContent = `${new Intl.DateTimeFormat(undefined, options).format(date)} ${osnmaClockSettings.showLocalTime ? "local" : "UTC"}`;
+    }
+    osnmaClockAge.textContent = age === null ? "Waiting for receiver time" : fresh ? `${source.source}; updated ${age} ms ago` : `${source.source}; stale (${(age / 1000).toFixed(1)} s old)`;
+    osnmaClockAge.dataset.state = age === null ? "waiting" : fresh ? "good" : "bad";
+    if (latestPvtClock) {
+      const pvt = latestPvtClock;
+      osnmaClockPvt.textContent = `${pvt.validDate && pvt.validTime ? "Date/time valid" : "Date/time invalid"}; date ${pvt.confirmedDate ? "confirmed" : "unconfirmed"}; time ${pvt.confirmedTime ? "confirmed" : "unconfirmed"}; fully resolved ${pvt.fullyResolved ? "yes" : "no"}; tAcc ${pvt.tAccNs.toLocaleString()} ns`;
+      osnmaClockPvt.dataset.state = pvt.validDate && pvt.validTime ? "good" : "waiting";
+    } else { osnmaClockPvt.textContent = "Waiting for NAV-PVT"; osnmaClockPvt.dataset.state = "waiting"; }
+    if (latestTimeUtcClock) {
+      const utc = latestTimeUtcClock;
+      osnmaClockTimeUtc.textContent = `UTC ${utc.validUtc ? "valid" : "invalid"}; TOW ${utc.validTow ? "valid" : "invalid"}; week ${utc.validWeek ? "valid" : "invalid"}; tAcc ${utc.tAccNs.toLocaleString()} ns`;
+      osnmaClockTimeUtc.dataset.state = utc.validUtc ? "good" : "waiting";
+    } else { osnmaClockTimeUtc.textContent = "Waiting for NAV-TIMEUTC"; osnmaClockTimeUtc.dataset.state = "waiting"; }
+    const status = latestOsnmaStatus;
+    const statusFresh = status && now >= status.receivedAt && now - status.receivedAt <= 40000 && status.connectionId === liveConnectionId;
+    const timeCheck = latestOsnmaTimeCheck;
+    if (statusFresh && (status.timSyncStatus === 4 || status.timingAuthResult === 2 || timeCheck?.status === 4)) {
+      osnmaClockAuth.textContent = "OSNMA time verification failed";
+      osnmaClockAuth.dataset.state = "bad";
+    } else if (statusFresh && timeCheck?.status === 3 && timeCheck.authenticated) {
+      osnmaClockAuth.textContent = "OSNMA timing authenticated; receiver time-sync check passed";
+      osnmaClockAuth.dataset.state = "good";
+    } else if (statusFresh && status.timingAuthResult === 1) {
+      osnmaClockAuth.textContent = "Timing parameters authenticated; clock check pending";
+      osnmaClockAuth.dataset.state = "waiting";
+    } else {
+      osnmaClockAuth.textContent = statusFresh ? "Clock time not authenticated by OSNMA" : "OSNMA verification unavailable";
+      osnmaClockAuth.dataset.state = "waiting";
+    }
   }
 
   function gnssColor(gnssId) { return ["#ffb347", "#00ffff", "#66ff88", "#ff7262", "#ffffff", "#ffff66", "#f27bfd", "#88aaff"][gnssId] || "#aaaaaa"; }
@@ -1180,7 +1245,7 @@
     const result = await sendTrustedClockTime();
     if (connectionId !== liveConnectionId) return;
     osnmaTrustedTimeStatus.textContent = result.accepted
-      ? "Trusted UTC accepted; waiting for a new OSNMA time-sync check."
+      ? "Trusted UTC accepted."
       : `Trusted UTC was not accepted (${result.message || `MGA-ACK info ${result.infoCode}`}).`;
   }
   async function updateLocalClock() {
@@ -1198,6 +1263,7 @@
   function resetLocalClock() {
     liveConnectionId += 1; latestReceiverUtc = null; appClockOffsetMs = 0;
     trustedClockSample = null;
+    latestPvtClock = null; latestTimeUtcClock = null; refreshOsnmaClock();
     clockOffset.textContent = "NTP/local clock offset: --";
     refreshLocalClock();
   }
@@ -1483,6 +1549,7 @@
     if (messageClass === 0x13 && messageId === 0x60) receiveMgaAck(payload);
     if (messageClass === 0x0a && messageId === 0x31) parseMonSpan(payload);
     if (messageClass === 0x01 && messageId === 0x07) parseNavPvt(payload);
+    if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x21) parseNavTimeUtc(payload);
     if (messageClass === 0x01 && messageId === 0x35) parseNavSat(payload);
     if (messageClass === 0x01 && messageId === 0x43) parseNavSig(payload);
     if (messageClass === 0x02 && messageId === 0x15) parseRawx(payload);
@@ -1715,6 +1782,7 @@
         ["Navigation rate", 0x30210002, 1, 2],
         ["MON-SPAN UART1", 0x2091038c, 1, 1],
         ["NAV-PVT UART1", 0x20910007, 1, 1],
+        ["NAV-TIMEUTC UART1", 0x2091005c, 1, 1],
         ["NAV-SAT UART1", 0x20910016, 1, 1],
         ["NAV-STATUS UART1", 0x2091001b, 1, 1],
         ["Assistance message ACKs", 0x10110025, 1, 1],
@@ -2059,10 +2127,13 @@
   syncReceiverBaud();
   syncOsnmaClockForm();
   refreshOsnmaIndicators();
+  refreshOsnmaClock();
   setInterval(refreshOsnmaIndicators, 1000);
+  setInterval(refreshOsnmaClock, 100);
   configureButton.addEventListener("click", configureMonSpan);
   osnmaTrustComputerClock.addEventListener("change", updateOsnmaClockSettings);
   osnmaClockAccuracy.addEventListener("change", updateOsnmaClockSettings);
+  osnmaClockLocalTime.addEventListener("change", updateOsnmaClockSettings);
   osnmaSendTrustedTime.addEventListener("click", sendTrustedTimeNow);
   osnmaUpdateLocalTime.addEventListener("click", updateLocalClock);
   osnmaProvisionButton.addEventListener("click", () => {

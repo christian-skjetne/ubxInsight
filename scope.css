@@ -112,6 +112,22 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .osnma-clock-row button { display: inline-flex; align-items: center; justify-self: start; gap: 7px; height: auto; min-height: 32px; }
 #osnma-local-time { min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
 .osnma-clock-settings p { max-width: 900px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.osnma-clock-display { margin-top: 16px; border-top: 1px solid var(--line); }
+.osnma-clock-display > header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.osnma-clock-display h2 { margin: 0 auto 0 0; font-size: 14px; }
+.osnma-clock-display > header span { color: var(--muted); font-size: 12px; }
+.osnma-clock-display [data-state="good"] { color: #66ff88; }
+.osnma-clock-display [data-state="waiting"] { color: #ffff66; }
+.osnma-clock-display [data-state="bad"] { color: #ff7262; }
+.osnma-clock-face { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
+.osnma-clock-face strong { color: var(--text); font-size: 26px; font-variant-numeric: tabular-nums; }
+.osnma-clock-face label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.osnma-clock-face input { width: 15px; height: 15px; accent-color: #59c3c3; }
+.osnma-clock-evidence { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+.osnma-clock-evidence > div { display: grid; align-content: start; gap: 7px; min-width: 0; padding: 12px; border-right: 1px solid var(--line); }
+.osnma-clock-evidence > div:last-child { border-right: 0; }
+.osnma-clock-evidence strong { overflow-wrap: anywhere; color: var(--text); font-size: 12px; line-height: 1.45; }
+.osnma-clock-display .osnma-note { margin: 10px 0 0; font-size: 12px; }
 .osnma-overview > div { display: grid; gap: 6px; min-width: 0; padding: 14px; border-right: 1px solid var(--line); }
 .osnma-overview > div:last-child { border-right: 0; }
 .osnma-overview strong { overflow-wrap: anywhere; color: var(--text); font-size: 13px; }
@@ -162,6 +178,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .playback-actions { display: flex; gap: 7px; }
 .playback-controls button { display: inline-flex; align-items: center; gap: 5px; }
 .playback-controls label { display: flex; align-items: center; gap: 8px; }
-@media (max-width: 800px) { .osnma-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-overview > div:nth-child(2) { border-right: 0; } .osnma-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .osnma-status-grid, .osnma-auth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-status-grid > div:nth-child(3n), .osnma-auth-grid > div:nth-child(4n) { border-right: 1px solid var(--line); } .osnma-status-grid > div:nth-child(2n), .osnma-auth-grid > div:nth-child(2n) { border-right: 0; } }
+@media (max-width: 800px) { .osnma-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-overview > div:nth-child(2) { border-right: 0; } .osnma-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .osnma-status-grid, .osnma-auth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-status-grid > div:nth-child(3n), .osnma-auth-grid > div:nth-child(4n) { border-right: 1px solid var(--line); } .osnma-status-grid > div:nth-child(2n), .osnma-auth-grid > div:nth-child(2n) { border-right: 0; } .osnma-clock-evidence { grid-template-columns: 1fr; } .osnma-clock-evidence > div { border-right: 0; border-bottom: 1px solid var(--line); } .osnma-clock-evidence > div:last-child { border-bottom: 0; } }
 @media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } #gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }
 @media (max-width: 650px) { .osnma-clock-row { grid-template-columns: minmax(0, 1fr); justify-items: start; } }
