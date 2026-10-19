@@ -66,6 +66,7 @@ canvas { display: block; width: 100%; background: #090c12; }
 #position-info { color: var(--muted); font-variant-numeric: tabular-nums; }
 #gnss-threat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px; border-block: 1px solid var(--line); background: var(--panel); }
 .gnss-threat-indicator { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 9px 12px; border-left: 3px solid var(--line); }
+.osnma-overview .gnss-threat-indicator, .osnma-clock-evidence .gnss-threat-indicator, .osnma-status-grid .gnss-threat-indicator, .osnma-auth-grid .gnss-threat-indicator { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 4px; background: #121720; }
 .gnss-threat-indicator span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .gnss-threat-indicator strong { font-size: 13px; font-weight: 600; }
 .gnss-threat-indicator[data-state="good"] { border-left-color: #66ff88; }
@@ -83,8 +84,8 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .constellation input { width: 14px; height: 14px; accent-color: var(--constellation-color); }
 .constellation.gps { --constellation-color: #ffb347; } .constellation.sbas { --constellation-color: #00ffff; } .constellation.galileo { --constellation-color: #66ff88; } .constellation.beidou { --constellation-color: #ff7262; }
 .constellation.imes { --constellation-color: #ffffff; } .constellation.qzss { --constellation-color: #ffff66; } .constellation.glonass { --constellation-color: #f27bfd; } .constellation.navic { --constellation-color: #88aaff; }
-.signal-plot { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.signal-plot header { position: relative; padding: 9px 48px 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.signal-plot, .osnma-clock-display, .osnma-data { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.signal-plot header, .osnma-clock-display > header, .osnma-data > header { position: relative; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .signal-plot header > .graph-export-button { position: absolute; top: 8px; right: 10px; }
 .signal-plot h2 { margin: 0; font-size: 14px; }
 .signal-plot h2 span { color: var(--muted); font-size: 11px; font-weight: 400; }
@@ -96,7 +97,7 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .signal-plot.x20-security canvas { height: clamp(560px, 66vh, 900px); }
 .security-summary { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 12px; line-height: 1.5; }
 #sec-event-log { max-height: 180px; overflow-y: auto; white-space: pre-line; }
-.osnma-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); }
+.osnma-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
 .osnma-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 .osnma-actions button { display: inline-flex; align-items: center; gap: 7px; }
 .osnma-actions .material-symbols-outlined { margin: 0; }
@@ -112,41 +113,34 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .osnma-clock-row button { display: inline-flex; align-items: center; justify-self: start; gap: 7px; height: auto; min-height: 32px; }
 #osnma-local-time { min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
 .osnma-clock-settings p { max-width: 900px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-.osnma-clock-display { margin-top: 16px; border-top: 1px solid var(--line); }
-.osnma-clock-display > header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.osnma-clock-display { margin-top: 14px; }
+.osnma-clock-display > header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .osnma-clock-display h2 { margin: 0 auto 0 0; font-size: 14px; }
 .osnma-clock-display > header span { color: var(--muted); font-size: 12px; }
 .osnma-clock-display [data-state="good"] { color: #66ff88; }
 .osnma-clock-display [data-state="waiting"] { color: #ffff66; }
 .osnma-clock-display [data-state="bad"] { color: #ff7262; }
-.osnma-clock-face { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
+.osnma-clock-face { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 12px; }
 .osnma-clock-face strong { color: var(--text); font-size: 26px; font-variant-numeric: tabular-nums; }
 .osnma-clock-face label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .osnma-clock-face input { width: 15px; height: 15px; accent-color: #59c3c3; }
-.osnma-clock-evidence { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line); }
-.osnma-clock-evidence > div { display: grid; align-content: start; gap: 7px; min-width: 0; padding: 12px; border-right: 1px solid var(--line); }
-.osnma-clock-evidence > div:last-child { border-right: 0; }
-.osnma-clock-evidence strong { overflow-wrap: anywhere; color: var(--text); font-size: 12px; line-height: 1.45; }
-.osnma-clock-display .osnma-note { margin: 10px 0 0; font-size: 12px; }
-.osnma-overview > div { display: grid; gap: 6px; min-width: 0; padding: 14px; border-right: 1px solid var(--line); }
-.osnma-overview > div:last-child { border-right: 0; }
-.osnma-overview strong { overflow-wrap: anywhere; color: var(--text); font-size: 13px; }
+.osnma-clock-evidence { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 0 12px 12px; }
+.osnma-clock-evidence strong, .osnma-overview strong { overflow-wrap: anywhere; color: var(--text); font-size: 12px; line-height: 1.45; }
+.osnma-clock-display .osnma-note { margin: 0; padding: 0 12px 12px; font-size: 12px; }
 .osnma-label { color: var(--muted); font-size: 11px; text-transform: uppercase; }
 .osnma-note { max-width: 1000px; color: var(--muted); line-height: 1.5; }
 .osnma-note code { color: var(--text); }
-.osnma-data { margin-top: 18px; border-top: 1px solid var(--line); }
-.osnma-data > header { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); background: transparent; }
+.osnma-data { margin-top: 14px; }
+.osnma-data > header { display: flex; align-items: center; gap: 12px; }
 .osnma-data h2 { margin: 0 auto 0 0; font-size: 14px; }
 .osnma-data > header span { color: var(--muted); font-size: 12px; }
 .osnma-data > header { flex-wrap: wrap; }
 .osnma-data [data-state="good"] { color: #66ff88; }
 .osnma-data [data-state="waiting"] { color: #ffff66; }
 .osnma-data [data-state="bad"] { color: #ff7262; }
-.osnma-status-grid, .osnma-auth-grid { display: grid; border-bottom: 1px solid var(--line); background: var(--surface); }
+.osnma-status-grid, .osnma-auth-grid { display: grid; gap: 8px; padding: 12px; }
 .osnma-status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .osnma-auth-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.osnma-status-grid > div, .osnma-auth-grid > div { display: grid; gap: 6px; min-width: 0; padding: 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.osnma-status-grid > div:nth-child(3n), .osnma-auth-grid > div:nth-child(4n) { border-right: 0; }
 .osnma-status-grid strong, .osnma-auth-grid strong { overflow-wrap: anywhere; color: var(--text); font-size: 12px; }
 .osnma-table-wrap { overflow-x: auto; }
 .osnma-data table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
@@ -178,6 +172,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .playback-actions { display: flex; gap: 7px; }
 .playback-controls button { display: inline-flex; align-items: center; gap: 5px; }
 .playback-controls label { display: flex; align-items: center; gap: 8px; }
-@media (max-width: 800px) { .osnma-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-overview > div:nth-child(2) { border-right: 0; } .osnma-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .osnma-status-grid, .osnma-auth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-status-grid > div:nth-child(3n), .osnma-auth-grid > div:nth-child(4n) { border-right: 1px solid var(--line); } .osnma-status-grid > div:nth-child(2n), .osnma-auth-grid > div:nth-child(2n) { border-right: 0; } .osnma-clock-evidence { grid-template-columns: 1fr; } .osnma-clock-evidence > div { border-right: 0; border-bottom: 1px solid var(--line); } .osnma-clock-evidence > div:last-child { border-bottom: 0; } }
+@media (max-width: 800px) { .osnma-overview, .osnma-status-grid, .osnma-auth-grid, .osnma-clock-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } #gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }
-@media (max-width: 650px) { .osnma-clock-row { grid-template-columns: minmax(0, 1fr); justify-items: start; } }
+@media (max-width: 650px) { .osnma-clock-row { grid-template-columns: minmax(0, 1fr); justify-items: start; } .osnma-overview, .osnma-status-grid, .osnma-auth-grid, .osnma-clock-evidence { grid-template-columns: minmax(0, 1fr); } }

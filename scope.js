@@ -1088,6 +1088,9 @@
       osnmaClockAuth.textContent = statusFresh ? "Clock time not authenticated by OSNMA" : "OSNMA verification unavailable";
       osnmaClockAuth.dataset.state = "waiting";
     }
+    [osnmaClockPvt, osnmaClockTimeUtc, osnmaClockAuth].forEach((element) => {
+      if (element.parentElement?.classList?.contains("gnss-threat-indicator")) element.parentElement.dataset.state = element.dataset.state || "waiting";
+    });
   }
 
   function gnssColor(gnssId) { return ["#ffb347", "#00ffff", "#66ff88", "#ff7262", "#ffffff", "#ffff66", "#f27bfd", "#88aaff"][gnssId] || "#aaaaaa"; }
@@ -1142,15 +1145,19 @@
 
   function renderOsnma() {
     osnmaInputStatus.textContent = osnmaE1bFrameCount ? `Receiving Galileo E1-B (${osnmaFrames.size} satellites)` : "Waiting for Galileo E1-B data";
+    osnmaInputStatus.dataset.state = osnmaE1bFrameCount ? "good" : "waiting";
     osnmaTimeStatus.textContent = osnmaGalileoTime || "Waiting for NAV-TIMEGAL";
+    osnmaTimeStatus.dataset.state = osnmaGalileoTime?.startsWith("GST week") ? "good" : "waiting";
     osnmaFrameCount.textContent = `${osnmaE1bFrameCount} frame${osnmaE1bFrameCount === 1 ? "" : "s"}`;
     if (latestOsnmaStatus) {
       const status = latestOsnmaStatus;
       osnmaTrustStatus.textContent = `PKID ${status.pubKeyId || "none"} ${status.pubKeyValid ? "key valid" : "key not validated"}; Merkle root ${status.merkleRootValid ? "valid" : "not validated"}`;
+      osnmaTrustStatus.dataset.state = status.pubKeyValid && status.merkleRootValid ? "good" : "waiting";
       const satelliteResults = [...osnmaSatelliteResults.values()];
       const authenticatedSatellites = satelliteResults.filter((satellite) => satellite.authStatus === 1).length;
       const failedSatellites = satelliteResults.filter((satellite) => satellite.authStatus === 0).length;
       osnmaAuthStatus.textContent = satelliteResults.length ? `${authenticatedSatellites} authenticated; ${failedSatellites} failed (retained)` : "No satellite results yet";
+      osnmaAuthStatus.dataset.state = failedSatellites ? "bad" : authenticatedSatellites ? "good" : "waiting";
       const nmaDescription = osnmaCodeDescription("nma", status.nmaStatus);
       const cpksDescription = osnmaCodeDescription("cpks", status.cpks);
       osnmaServiceState.textContent = `${status.osnmaEnabled ? "OSNMA enabled" : "OSNMA disabled"}; ${nmaDescription}; chain ${status.chainInForce}; ${cpksDescription}`;
@@ -1184,9 +1191,13 @@
       osnmaServiceState.textContent = "--"; osnmaTimeSyncState.textContent = "--"; osnmaTimeDelta.textContent = "--"; osnmaHeaderAuth.textContent = "--";
       osnmaDsmAuth.textContent = "--"; osnmaTeslaAuth.textContent = "--"; osnmaTimingAuth.textContent = "--";
       osnmaHeaderAuth.title = ""; osnmaDsmAuth.title = ""; osnmaTeslaAuth.title = ""; osnmaTimingAuth.title = "";
+      osnmaTrustStatus.dataset.state = "waiting"; osnmaAuthStatus.dataset.state = "waiting";
       osnmaAuthSatelliteCount.textContent = "No results";
       osnmaSatelliteRows.innerHTML = '<tr><td colspan="4">No SEC-OSNMA satellite results received.</td></tr>';
     }
+    [osnmaInputStatus, osnmaTimeStatus, osnmaTrustStatus, osnmaAuthStatus].forEach((element) => {
+      if (element.parentElement?.classList?.contains("gnss-threat-indicator")) element.parentElement.dataset.state = element.dataset.state || "waiting";
+    });
     refreshOsnmaIndicators();
     if (!osnmaFrames.size) {
       osnmaFrameRows.innerHTML = '<tr><td colspan="4">No Galileo E1-B frames received.</td></tr>';
@@ -1298,6 +1309,9 @@
     const state = error || age > 60000 ? "bad" : working && age <= 40000 ? "good" : "waiting";
     osnmaReceiverStatus.dataset.state = state;
     osnmaReceiverStatus.textContent = status ? `${state === "bad" ? "Error" : state === "good" ? "Working" : "Waiting"}; SEC-OSNMA v${status.version}; ${status.numSvs} SVs monitored` : "Waiting for SEC-OSNMA";
+    [osnmaServiceState, osnmaTimeSyncState, osnmaTimeDelta, osnmaHeaderAuth, osnmaDsmAuth, osnmaTeslaAuth, osnmaTimingAuth].forEach((element) => {
+      if (element.parentElement?.classList?.contains("gnss-threat-indicator")) element.parentElement.dataset.state = element.dataset.state || "waiting";
+    });
     refreshLocalClock(now);
   }
   function osnmaCodeDescription(group, code) { return OSNMA_STATUS_LABELS[group][code] || `Unknown status (${code})`; }

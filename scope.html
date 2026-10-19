@@ -91,7 +91,7 @@
       <div class="osnma-actions">
         <button id="osnma-provision" type="button" class="secondary"><span class="material-symbols-outlined" aria-hidden="true">upload</span>Provision receiver</button>
         <input id="osnma-folder-picker" type="file" webkitdirectory multiple accept=".xml,.crt,.crl,.p256" hidden aria-label="Select the OSNMA trust-material folder">
-        <span id="osnma-provision-status" role="status" aria-live="polite">Connect the receiver to provision trust material.</span>
+        <span id="osnma-provision-status" role="status" aria-live="polite">Update receiver trust material.</span>
       </div>
       <details class="osnma-clock-settings" open>
         <summary>Trusted time configuration</summary>
@@ -118,30 +118,30 @@
           <label><input id="osnma-clock-local-time" type="checkbox"> Show local time</label>
         </div>
         <div class="osnma-clock-evidence">
-          <div><span class="osnma-label">NAV-PVT time</span><strong id="osnma-clock-pvt" data-state="waiting">Waiting for NAV-PVT</strong></div>
-          <div><span class="osnma-label">NAV-TIMEUTC</span><strong id="osnma-clock-timeutc" data-state="waiting">Waiting for NAV-TIMEUTC</strong></div>
-          <div><span class="osnma-label">OSNMA time verification</span><strong id="osnma-clock-auth" data-state="waiting">Not verified</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>NAV-PVT time</span><strong id="osnma-clock-pvt" data-state="waiting">Waiting for NAV-PVT</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>NAV-TIMEUTC</span><strong id="osnma-clock-timeutc" data-state="waiting">Waiting for NAV-TIMEUTC</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>OSNMA time verification</span><strong id="osnma-clock-auth" data-state="waiting">Not verified</strong></div>
         </div>
         <p class="osnma-note">PVT/TIMEUTC validity, confirmation, and accuracy are receiver-reported, not cryptographic authentication. OSNMA verification is reported separately from SEC-OSNMA.</p>
       </section>
       <section class="osnma-overview" aria-label="OSNMA readiness">
-        <div><span class="osnma-label">OSNMA input</span><strong id="osnma-input-status">Waiting for Galileo E1-B data</strong></div>
-        <div><span class="osnma-label">Galileo time</span><strong id="osnma-time-status">Waiting for NAV-TIMEGAL</strong></div>
-        <div><span class="osnma-label">Trust material</span><strong id="osnma-trust-status">Not loaded</strong></div>
-        <div><span class="osnma-label">Authentication</span><strong id="osnma-auth-status">Not verified</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>OSNMA input</span><strong id="osnma-input-status">Waiting for Galileo E1-B data</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>Galileo time</span><strong id="osnma-time-status">Waiting for NAV-TIMEGAL</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>Trust material</span><strong id="osnma-trust-status">Not loaded</strong></div>
+        <div class="gnss-threat-indicator" data-state="waiting"><span>Authentication</span><strong id="osnma-auth-status">Not verified</strong></div>
       </section>
       <section class="osnma-data" aria-labelledby="osnma-receiver-heading">
         <header><h2 id="osnma-receiver-heading">Receiver OSNMA status</h2><span id="osnma-receiver-status" data-state="waiting">Waiting for SEC-OSNMA</span><span id="osnma-last-update" data-state="waiting">Last update: --</span></header>
         <div class="osnma-status-grid">
-          <div><span class="osnma-label">Service / NMA code</span><strong id="osnma-service-state">--</strong></div>
-          <div><span class="osnma-label">Time-sync requirement</span><strong id="osnma-time-sync-state">--</strong></div>
-          <div><span class="osnma-label">Last receiver time-sync difference</span><strong id="osnma-time-delta">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>Service / NMA code</span><strong id="osnma-service-state" data-state="waiting">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>Time-sync requirement</span><strong id="osnma-time-sync-state" data-state="waiting">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>Last receiver time-sync difference</span><strong id="osnma-time-delta" data-state="waiting">--</strong></div>
         </div>
         <div class="osnma-auth-grid" role="group" aria-label="Authentication status codes">
-          <div><span class="osnma-label">NMA header</span><strong id="osnma-header-auth">--</strong></div>
-          <div><span class="osnma-label">DSM result</span><strong id="osnma-dsm-auth">--</strong></div>
-          <div><span class="osnma-label">TESLA key result</span><strong id="osnma-tesla-auth">--</strong></div>
-          <div><span class="osnma-label">Timing parameters</span><strong id="osnma-timing-auth">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>NMA header</span><strong id="osnma-header-auth" data-state="waiting">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>DSM result</span><strong id="osnma-dsm-auth" data-state="waiting">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>TESLA key result</span><strong id="osnma-tesla-auth" data-state="waiting">--</strong></div>
+          <div class="gnss-threat-indicator" data-state="waiting"><span>Timing parameters</span><strong id="osnma-timing-auth" data-state="waiting">--</strong></div>
         </div>
       </section>
       <section class="osnma-data" aria-labelledby="osnma-satellites-heading">
