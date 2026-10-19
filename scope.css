@@ -100,14 +100,18 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .osnma-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 .osnma-actions button { display: inline-flex; align-items: center; gap: 7px; }
 .osnma-actions .material-symbols-outlined { margin: 0; }
-#osnma-provision-status { color: var(--muted); font-size: 12px; line-height: 1.4; }
-.osnma-clock-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+#osnma-provision-status, #osnma-trusted-time-status { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.osnma-clock-settings { margin: 12px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.osnma-clock-settings > summary { width: fit-content; color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
+.osnma-clock-controls { display: grid; gap: 10px; margin-top: 12px; }
+.osnma-clock-row { display: grid; grid-template-columns: minmax(220px, max-content) minmax(0, 1fr); align-items: center; gap: 10px 18px; }
+.osnma-clock-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 24px; }
 .osnma-clock-toggle, .osnma-clock-accuracy { display: inline-flex; align-items: center; gap: 7px; }
 .osnma-clock-toggle input { width: 15px; height: 15px; accent-color: #59c3c3; }
 .osnma-clock-accuracy input { width: 70px; }
-.osnma-clock-settings button { display: inline-flex; align-items: center; gap: 7px; height: auto; min-height: 32px; }
+.osnma-clock-row button { display: inline-flex; align-items: center; justify-self: start; gap: 7px; height: auto; min-height: 32px; }
 #osnma-local-time { min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
-.osnma-clock-settings p { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.osnma-clock-settings p { max-width: 900px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .osnma-overview > div { display: grid; gap: 6px; min-width: 0; padding: 14px; border-right: 1px solid var(--line); }
 .osnma-overview > div:last-child { border-right: 0; }
 .osnma-overview strong { overflow-wrap: anywhere; color: var(--text); font-size: 13px; }
@@ -160,3 +164,4 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .playback-controls label { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 800px) { .osnma-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-overview > div:nth-child(2) { border-right: 0; } .osnma-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); } .osnma-status-grid, .osnma-auth-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .osnma-status-grid > div:nth-child(3n), .osnma-auth-grid > div:nth-child(4n) { border-right: 1px solid var(--line); } .osnma-status-grid > div:nth-child(2n), .osnma-auth-grid > div:nth-child(2n) { border-right: 0; } }
 @media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } #gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }
+@media (max-width: 650px) { .osnma-clock-row { grid-template-columns: minmax(0, 1fr); justify-items: start; } }

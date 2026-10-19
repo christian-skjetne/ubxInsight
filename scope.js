@@ -96,6 +96,8 @@
   const osnmaProvisionStatus = document.querySelector("#osnma-provision-status");
   const osnmaTrustComputerClock = document.querySelector("#osnma-trust-computer-clock");
   const osnmaClockAccuracy = document.querySelector("#osnma-clock-accuracy");
+  const osnmaSendTrustedTime = document.querySelector("#osnma-send-trusted-time");
+  const osnmaTrustedTimeStatus = document.querySelector("#osnma-trusted-time-status");
   const osnmaUpdateLocalTime = document.querySelector("#osnma-update-local-time");
   const osnmaLocalTime = document.querySelector("#osnma-local-time");
   let appClockOffsetMs = 0;
@@ -213,7 +215,7 @@
     osnmaClockSettings.useComputerClock = osnmaTrustComputerClock.checked;
     const value = Number(osnmaClockAccuracy.value);
     osnmaClockSettings.accuracySeconds = Number.isFinite(value) ? Math.max(1, Math.min(60, Math.round(value))) : DEFAULT_OSNMA_CLOCK_SETTINGS.accuracySeconds;
-    syncOsnmaClockForm(); saveOsnmaClockSettings();
+    syncOsnmaClockForm(); saveOsnmaClockSettings(); refreshLocalClock();
   }
   function syncReceiverBaud() { baud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); }
   function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
@@ -1160,8 +1162,26 @@
   }
   function refreshLocalClock(now = Date.now()) {
     osnmaUpdateLocalTime.disabled = !canCorrectLocalClock(now);
+    osnmaSendTrustedTime.disabled = !writer || !reading || replayData || !osnmaClockSettings.useComputerClock || trustedClockUpdatePending || configureButton.disabled;
     const correction = `${appClockOffsetMs >= 0 ? "+" : "-"}${(Math.abs(appClockOffsetMs) / 1000).toFixed(3)} s`;
     osnmaLocalTime.textContent = `Local UTC: ${new Date(now + appClockOffsetMs).toISOString().replace("T", " ").replace("Z", " UTC")}; correction ${correction}`;
+  }
+  async function sendTrustedTimeNow() {
+    if (!osnmaClockSettings.useComputerClock) {
+      osnmaTrustedTimeStatus.textContent = "Enable the trusted computer UTC requirement before sending.";
+      return;
+    }
+    if (!writer || !reading || replayData || configureButton.disabled) {
+      osnmaTrustedTimeStatus.textContent = "Connect a receiver and finish configuration before sending trusted UTC.";
+      return;
+    }
+    const connectionId = liveConnectionId;
+    osnmaTrustedTimeStatus.textContent = "Sending trusted UTC and waiting for receiver acknowledgement...";
+    const result = await sendTrustedClockTime();
+    if (connectionId !== liveConnectionId) return;
+    osnmaTrustedTimeStatus.textContent = result.accepted
+      ? "Trusted UTC accepted; waiting for a new OSNMA time-sync check."
+      : `Trusted UTC was not accepted (${result.message || `MGA-ACK info ${result.infoCode}`}).`;
   }
   async function updateLocalClock() {
     if (!canCorrectLocalClock()) { refreshLocalClock(); setStatus("App time unchanged: an authenticated passed OSNMA check of accepted computer UTC assistance and a healthy live receiver are required"); return; }
@@ -1723,19 +1743,13 @@
       configurationStatus.className = "configuration-light config-pending"; configurationStatus.setAttribute("aria-label", "Configuration in progress"); configurationTooltip.textContent = "Configuration: waiting for ACK/NAK responses...";
       const results = [];
       for (const [name, key, value, valueBytes] of receiverInterfaceRequests(requests, settings.configureAllInterfaces)) results.push({ name, result: await sendValset(name, key, value, valueBytes) });
-      let trustedTimeResult = null;
       trustedClockSample = null;
-      if (osnmaClockSettings.useComputerClock) {
-        trustedTimeResult = await sendTrustedClockTime();
-        const result = trustedTimeResult.accepted ? "ack" : trustedTimeResult.message === "receiver acknowledgement timed out" ? "timeout" : trustedTimeResult.message === "serial write failed" ? "write failed" : "nak";
-        const name = trustedTimeResult.infoCode === undefined ? "Trusted computer UTC assistance" : `Trusted computer UTC assistance (MGA-ACK info ${trustedTimeResult.infoCode})`;
-        results.push({ name, result });
-      }
+      osnmaTrustedTimeStatus.textContent = "Configuration updated; send trusted UTC explicitly when ready.";
       showConfigResults(results);
       startSecSigPolling();
-      setStatus(trustedTimeResult?.accepted ? `Configuration completed for ${receiver.value.toUpperCase()}; trusted UTC time accepted` : `Configuration completed for ${receiver.value.toUpperCase()}; waiting for NAV and monitoring data`);
+      setStatus(`Configuration completed for ${receiver.value.toUpperCase()}; waiting for NAV and monitoring data`);
     } catch (error) { setStatus(`Configuration failed: ${error.message}`); }
-    finally { configureButton.disabled = false; }
+    finally { configureButton.disabled = false; refreshLocalClock(); }
   }
 
   async function reconnectAtBaud(rate) {
@@ -2049,6 +2063,7 @@
   configureButton.addEventListener("click", configureMonSpan);
   osnmaTrustComputerClock.addEventListener("change", updateOsnmaClockSettings);
   osnmaClockAccuracy.addEventListener("change", updateOsnmaClockSettings);
+  osnmaSendTrustedTime.addEventListener("click", sendTrustedTimeNow);
   osnmaUpdateLocalTime.addEventListener("click", updateLocalClock);
   osnmaProvisionButton.addEventListener("click", () => {
     if (!writer) { osnmaProvisionStatus.textContent = "Connect a receiver before provisioning."; return; }

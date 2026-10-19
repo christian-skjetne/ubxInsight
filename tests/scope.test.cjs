@@ -408,7 +408,8 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
     latestReceiverUtc: null, latestOsnmaStatus: workingStatus(), liveConnectionId: 1,
     trustedClockSample: sample, trustedClockUpdatePending: false,
     latestOsnmaTimeCheck: { differenceMs: -513, status: 3, receivedAt: 99000, trustedClockSample: sample, authenticated: true },
-    appClockOffsetMs: 0, osnmaUpdateLocalTime: {}, osnmaLocalTime: {}, clockOffset: {},
+    appClockOffsetMs: 0, osnmaUpdateLocalTime: {}, osnmaSendTrustedTime: {}, osnmaLocalTime: {}, clockOffset: {},
+    configureButton: { disabled: false },
     osnmaClockSettings: { accuracySeconds: 1 }, setStatus() {},
     async sendMgaAssistance(payload, messageId) { sent.push({ payload, messageId }); return { accepted: true }; },
   });
@@ -460,6 +461,23 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   assert.equal(context.appClockOffsetMs, 0);
   assert.equal(context.latestReceiverUtc, null);
   assert.equal(context.osnmaUpdateLocalTime.disabled, true);
+});
+
+test("trusted UTC is sent only by explicit action after opt-in", async () => {
+  let sendCount = 0;
+  const context = loadFunctions(["sendTrustedTimeNow"], {
+    osnmaClockSettings: { useComputerClock: false },
+    osnmaTrustedTimeStatus: {}, configureButton: { disabled: false },
+    writer: {}, reading: true, replayData: null, liveConnectionId: 1,
+    async sendTrustedClockTime() { sendCount += 1; return { accepted: true }; },
+  });
+  await context.sendTrustedTimeNow();
+  assert.equal(sendCount, 0);
+  assert.match(context.osnmaTrustedTimeStatus.textContent, /Enable/);
+  context.osnmaClockSettings.useComputerClock = true;
+  await context.sendTrustedTimeNow();
+  assert.equal(sendCount, 1);
+  assert.match(context.osnmaTrustedTimeStatus.textContent, /accepted/);
 });
 
 test("OSNMA correction waits for a new check cycle after each accepted trusted UTC sample", () => {

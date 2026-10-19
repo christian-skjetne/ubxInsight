@@ -93,13 +93,24 @@
         <input id="osnma-folder-picker" type="file" webkitdirectory multiple accept=".xml,.crt,.crl,.p256" hidden aria-label="Select the OSNMA trust-material folder">
         <span id="osnma-provision-status" role="status" aria-live="polite">Connect the receiver to provision trust material.</span>
       </div>
-      <div class="osnma-clock-settings">
-        <button id="osnma-update-local-time" type="button" class="secondary" disabled title="Add the last passed OSNMA time difference to app UTC and send adjusted UTC as trusted time. Requires a new check after accepted assistance. Offset sign is not confirmed by the documentation; Windows time is unchanged."><span class="material-symbols-outlined" aria-hidden="true">update</span>Apply OSNMA offset &amp; resend trusted UTC</button>
-        <span id="osnma-local-time" role="status">Local UTC: --</span>
-        <label class="osnma-clock-toggle"><input id="osnma-trust-computer-clock" type="checkbox"> Use computer UTC as trusted time</label>
-        <label class="osnma-clock-accuracy">Reported uncertainty<input id="osnma-clock-accuracy" type="number" min="1" max="60" step="1" value="1" aria-label="Computer UTC uncertainty in seconds"> seconds</label>
-        <p>Enable only if this computer’s UTC clock is independently synchronized and within the stated uncertainty. The setting applies when you send receiver configuration; when off, no trusted-time message is sent.</p>
-      </div>
+      <details class="osnma-clock-settings" open>
+        <summary>Trusted time configuration</summary>
+        <div class="osnma-clock-controls">
+          <div class="osnma-clock-row">
+            <button id="osnma-send-trusted-time" type="button" class="secondary" disabled title="Send the current computer UTC and stated uncertainty to the connected receiver."><span class="material-symbols-outlined" aria-hidden="true">schedule_send</span>Send trusted time</button>
+            <span id="osnma-trusted-time-status" role="status" aria-live="polite">Connect a receiver to send trusted UTC.</span>
+          </div>
+          <div class="osnma-clock-row">
+            <button id="osnma-update-local-time" type="button" class="secondary" disabled title="Add the last passed OSNMA time difference to app UTC and send adjusted UTC as trusted time. Requires a new check after accepted assistance. Windows time is unchanged."><span class="material-symbols-outlined" aria-hidden="true">update</span>Apply OSNMA offset &amp; resend trusted UTC</button>
+            <span id="osnma-local-time" role="status">Local UTC: --</span>
+          </div>
+          <div class="osnma-clock-options">
+            <label class="osnma-clock-toggle"><input id="osnma-trust-computer-clock" type="checkbox"> Require trusted computer UTC for OSNMA</label>
+            <label class="osnma-clock-accuracy">Reported uncertainty<input id="osnma-clock-accuracy" type="number" min="1" max="60" step="1" value="1" aria-label="Computer UTC uncertainty in seconds"> seconds</label>
+          </div>
+          <p>Enable the receiver’s strict OSNMA time-sync requirement only if this computer’s UTC is independently synchronized and within the stated uncertainty. This setting does not send time; use Send trusted time to send computer UTC. When off, the strict requirement is disabled.</p>
+        </div>
+      </details>
       <section class="osnma-overview" aria-label="OSNMA readiness">
         <div><span class="osnma-label">OSNMA input</span><strong id="osnma-input-status">Waiting for Galileo E1-B data</strong></div>
         <div><span class="osnma-label">Galileo time</span><strong id="osnma-time-status">Waiting for NAV-TIMEGAL</strong></div>
