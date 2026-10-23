@@ -1,5 +1,8 @@
 # UBX Insight 
-Plot Ublox UBX SPAN (RF spectrum) power spectral density plots in-browser
+
+<img src="logo.png" alt="UBX Insight" width="320">
+
+Plot lots of data from your Ublox receiver in-browser.  
 Requires an F9 or X20-series Ublox receiver.
 
 ## Browser app:
