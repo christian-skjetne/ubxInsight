@@ -581,6 +581,30 @@ test("satellite reports decode signed sky coordinates and usage without mixing e
   assert.equal(context.decodeSatelliteReport(bytes), null);
 });
 
+test("satellite correction flags distinguish used sources and types from availability", () => {
+  const context = loadFunctions(["decodeSatelliteReport", "satelliteCorrectionText"], {});
+  const bytes = new Uint8Array(20); bytes[4] = 1; bytes[5] = 1;
+  const data = new DataView(bytes.buffer);
+  const cases = [[16, "SBAS"], [17, "RTCM"], [18, "SLAS"], [19, "SPARTN"], [23, "CLAS"], [24, "LPP"], [25, "HAS"], [20, "Pseudorange"], [21, "Carrier range"], [22, "Doppler"]];
+  for (const [bit, label] of cases) {
+    data.setUint32(16, 1 << bit, true);
+    const satellite = context.decodeSatelliteReport(bytes).satellites[0];
+    assert.equal(satellite.correctionsUsed, true);
+    assert.equal(context.satelliteCorrectionText(satellite), label);
+    assert.equal(satellite.used, false);
+  }
+  data.setUint32(16, (1 << 25) | (1 << 20) | (1 << 21) | 8, true);
+  const corrected = context.decodeSatelliteReport(bytes).satellites[0];
+  assert.equal(context.satelliteCorrectionText(corrected), "HAS, Pseudorange, Carrier range");
+  assert.equal(corrected.used, true);
+  for (const flags of [0, 0x40, 0x80000000, 0x8000, 0x80, 8]) {
+    data.setUint32(16, flags, true);
+    const satellite = context.decodeSatelliteReport(bytes).satellites[0];
+    assert.equal(satellite.correctionsUsed, false);
+    assert.equal(context.satelliteCorrectionText(satellite), flags === 0x40 ? "None used; differential corrections available" : "None used");
+  }
+});
+
 test("sky labels avoid elevation captions and omit below-horizon markers", () => {
   const labels = [];
   const drawing = new Proxy({ fillText(text, x, y) { labels.push({ text, x, y }); }, measureText: () => ({ width: 14 }) }, {
@@ -597,6 +621,22 @@ test("sky labels avoid elevation captions and omit below-horizon markers", () =>
   assert.ok(labels.find((label) => label.text === "G1").x < 300);
   for (const cardinal of ["N", "E", "S", "W"]) assert.ok(labels.some((label) => label.text === cardinal));
   assert.ok(!labels.some((label) => label.text === "E2"));
+});
+
+test("sky uses square corrected markers independently of solution use", () => {
+  const markers = [];
+  const drawing = new Proxy({ rect() { markers.push("square"); }, arc(centerX, centerY, radius) { if (radius === 5) markers.push("circle"); }, measureText: () => ({ width: 14 }) }, {
+    get(target, property) { return target[property] ?? (() => {}); },
+  });
+  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "gnssColor"], {
+    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
+  });
+  context.drawSatelliteSky([
+    { gnssId: 0, svId: 1, elevation: 45, azimuth: 0, used: true, correctionsUsed: false },
+    { gnssId: 2, svId: 2, elevation: 45, azimuth: 90, used: true, correctionsUsed: true },
+    { gnssId: 2, svId: 3, elevation: 45, azimuth: 180, used: false, correctionsUsed: true },
+  ]);
+  assert.deepEqual(markers, ["circle", "square", "square"]);
 });
 
 test("satellite filters and numeric sorting keep unknown positions last", () => {
@@ -617,6 +657,33 @@ test("satellite filters and numeric sorting keep unknown positions last", () => 
   assert.deepEqual(Array.from(context.selectedSatellites(report, all, { key: "id", direction: 1 }, true), (satellite) => satellite.svId), [3]);
   assert.equal(context.selectedSatellites(report, new Set([2]), { key: "id", direction: 1 }, true).length, 0);
   assert.equal(context.selectedSatellites(report, all, { key: "id", direction: 1 }, false).length, 3);
+});
+
+test("satellite C/N0 history accepts only NAV-SAT while preserving NAV2 reports", () => {
+  const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "appendSeries", "appendHistory"], {
+    satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
+    signalEpoch: { cno: 0 }, signalHistory: { cno: new Map() }, replayRebuilding: false, HISTORY_LENGTH: 600,
+    signalsEmpty: {}, renderSatellites() {}, renderHasDiagnostics() {}, drawSignals() {}, gnssColor() {},
+  });
+  const payload = new Uint8Array(20); payload[4] = 1; payload[5] = 1; payload[8] = 2; payload[9] = 12; payload[10] = 42;
+  new DataView(payload.buffer).setUint32(16, 1 << 25, true);
+  context.parseNavSat(payload, "NAV");
+  payload[10] = 35;
+  context.parseNavSat(payload, "NAV2");
+  assert.equal(context.signalEpoch.cno, 1);
+  assert.equal(context.signalHistory.cno.size, 1);
+  assert.equal(context.signalHistory.cno.get("2:12").values.length, 1);
+  assert.equal(context.signalHistory.cno.get("2:12").values[0].value, 42);
+  assert.equal(context.satelliteReports.NAV2.satellites[0].cno, 35);
+  assert.equal(context.hasCorrectionReports.NAV2.galileo, 1);
+  payload[10] = 43;
+  context.parseNavSat(payload, "NAV");
+  assert.equal(context.signalEpoch.cno, 2);
+  assert.equal(context.signalHistory.cno.get("2:12").values[1].value, 43);
+  payload[4] = 2;
+  context.parseNavSat(payload, "NAV");
+  assert.equal(context.signalEpoch.cno, 2);
+  assert.doesNotMatch(source, /parseNavSig\(/);
 });
 
 test("NAV-SAT snapshots remain separate for each solution and empty reports clear old satellites", () => {
@@ -643,7 +710,7 @@ test("NAV-SAT snapshots remain separate for each solution and empty reports clea
 test("satellites view marks stale data and preserves recorded source selection", () => {
   const option = {};
   const source = { value: "NAV", querySelector: () => option };
-  const context = loadFunctions(["renderSatellites", "selectedSatellites", "satelliteGnssName"], {
+  const context = loadFunctions(["renderSatellites", "selectedSatellites", "satelliteGnssName", "satelliteCorrectionText"], {
     satelliteSource: source, satellitesPanel: { hidden: false }, receiver: { value: "x20" },
     satelliteUsedOnly: { checked: false },
     satelliteReports: { NAV: { iTow: 1000, receivedAt: 1000, satellites: [{ gnssId: 2, svId: 12, cno: 42, elevation: 45, azimuth: 90, used: true, quality: 4, health: 1 }] }, NAV2: null },
@@ -653,6 +720,11 @@ test("satellites view marks stale data and preserves recorded source selection",
   });
   context.renderSatellites(1000);
   assert.match(context.satelliteRows.innerHTML, /Galileo 12.*42.*Used.*Healthy/);
+  assert.match(context.satelliteRows.innerHTML, /None used/);
+  context.satelliteReports.NAV.satellites[0].correctionSources = ["HAS"];
+  context.satelliteReports.NAV.satellites[0].correctionTypes = ["Pseudorange"];
+  context.renderSatellites(1000);
+  assert.match(context.satelliteRows.innerHTML, /HAS, Pseudorange/);
   assert.match(context.satelliteCount.textContent, /1 shown.*1 reported.*1 used/);
   context.satelliteReports.NAV.satellites.push({ gnssId: 2, svId: 24, cno: 30, elevation: 20, azimuth: 180, used: false, quality: 4, health: 1 });
   context.satelliteUsedOnly.checked = true;

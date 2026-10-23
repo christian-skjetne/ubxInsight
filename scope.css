@@ -59,9 +59,11 @@ main { width: 100%; margin: 0; padding: 12px; }
 .satellite-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .satellite-legend span::before { content: ""; width: 10px; height: 10px; border: 1px solid #72c7e7; border-radius: 50%; }
 .satellite-marker-used::before { background: #72c7e7; }
-#satellite-table { table-layout: fixed; font-variant-numeric: tabular-nums; }
+.satellite-legend .satellite-marker-corrected::before { border-radius: 0; background: linear-gradient(45deg, #72c7e7 50%, transparent 50%); }
+#satellite-table { table-layout: fixed; min-width: 640px; font-variant-numeric: tabular-nums; }
 #satellite-table th, #satellite-table td { padding: 8px 6px; overflow-wrap: anywhere; }
-#satellite-table th:first-child { width: 23%; }
+#satellite-table th:first-child { width: 20%; }
+#satellite-table th:last-child { width: 27%; }
 .satellite-sort { display: flex; align-items: center; gap: 3px; width: 100%; height: auto; min-height: 32px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; }
 .satellite-sort > span:first-child { min-width: 0; }
 .satellite-sort .material-symbols-outlined { flex-basis: 12px; width: 12px; height: 12px; margin: 0; font-size: 12px; color: currentColor; transform: none; }

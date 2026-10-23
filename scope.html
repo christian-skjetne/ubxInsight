@@ -88,7 +88,7 @@
       <div class="satellite-toolbar"><label>Solution <select id="satellite-source"><option value="NAV">NAV</option><option value="NAV2">NAV2</option></select></label><label><input id="satellite-used-only" type="checkbox"> Used in solution only</label><span id="satellite-status" data-state="waiting">Waiting for NAV-SAT</span></div>
       <fieldset id="satellite-constellations"><legend>Constellations</legend></fieldset>
       <div id="satellite-views">
-        <section class="osnma-data"><header><h2>Satellite Sky View</h2><span>Azimuth / elevation</span></header><canvas id="satellite-sky" aria-label="Satellite azimuth and elevation sky plot"></canvas><div class="satellite-legend"><span class="satellite-marker-used">Used in solution</span><span class="satellite-marker-other">Not used</span></div></section>
+        <section class="osnma-data"><header><h2>Satellite Sky View</h2><span>Azimuth / elevation</span></header><canvas id="satellite-sky" aria-label="Satellite azimuth and elevation sky plot"></canvas><div class="satellite-legend"><span class="satellite-marker-used">Used in solution</span><span class="satellite-marker-other">Not used</span><span class="satellite-marker-corrected">Corrections used</span></div></section>
         <section class="osnma-data"><header><h2>Satellites</h2><span id="satellite-count">0 reported</span></header><div class="osnma-table-wrap"><table id="satellite-table"><thead><tr>
           <th scope="col" aria-sort="ascending"><button type="button" class="satellite-sort" data-sort="id" title="Sort by satellite"><span>Satellite</span><span class="material-symbols-outlined" aria-hidden="true">arrow_upward</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="cno" title="Sort by C/N0 (dB-Hz)"><span>C/N0</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
@@ -96,7 +96,8 @@
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="azimuth" title="Sort by azimuth (degrees)"><span class="satellite-sort-full">Azimuth</span><abbr class="satellite-sort-short" title="Azimuth (degrees)">Az.</abbr><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="used" title="Sort by solution use"><span>Use</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="health" title="Sort by health"><span>Health</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
-        </tr></thead><tbody id="satellite-rows"><tr><td colspan="6">Waiting for satellite data.</td></tr></tbody></table></div></section>
+          <th scope="col">Corrections</th>
+        </tr></thead><tbody id="satellite-rows"><tr><td colspan="7">Waiting for satellite data.</td></tr></tbody></table></div></section>
       </div>
     </section>
     <section id="signals-panel" role="tabpanel" aria-labelledby="signals-tab" hidden>
