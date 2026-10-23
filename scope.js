@@ -77,6 +77,20 @@
   const playbackSpeed = document.querySelector("#playback-speed");
   const spectrumTab = document.querySelector("#spectrum-tab");
   const positionTab = document.querySelector("#position-tab");
+  const satellitesTab = document.querySelector("#satellites-tab");
+  const satellitesPanel = document.querySelector("#satellites-panel");
+  const satelliteSource = document.querySelector("#satellite-source");
+  const satelliteUsedOnly = document.querySelector("#satellite-used-only");
+  const satelliteStatus = document.querySelector("#satellite-status");
+  const satelliteCount = document.querySelector("#satellite-count");
+  const satelliteRows = document.querySelector("#satellite-rows");
+  const satelliteSky = document.querySelector("#satellite-sky");
+  const satelliteFilters = document.querySelector("#satellite-constellations");
+  const satelliteTable = document.querySelector("#satellite-table");
+  const satelliteReports = { NAV: null, NAV2: null };
+  const satelliteConstellations = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
+  const satelliteSort = { key: "id", direction: 1 };
+  let satelliteSkyPoints = [];
   const signalsTab = document.querySelector("#signals-tab");
   const osnmaTab = document.querySelector("#osnma-tab");
   const spectrumPanel = document.querySelector("#spectrum-panel");
@@ -294,6 +308,7 @@
   }
   function resetReplayDerivedViews(removeMaps = true) {
     resetLocalClock();
+    resetSatelliteReports();
     resetPositionComparison();
     interfaceRxState = { counters: new Map(), name: null }; receiverInterface.textContent = "Interface: --";
     receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
@@ -1102,7 +1117,23 @@
     if (isNewer(iTow, positionComparisonState.latest[source])) positionComparisonState.latest[source] = sample;
     if (!positionComparisonState.epochs.has(iTow)) positionComparisonState.epochs.set(iTow, {});
     const epoch = positionComparisonState.epochs.get(iTow); epoch[source] = sample;
+    sample.pDop = data.getUint16(76, true) / 100;
+    sample.hDop = epoch[`${source}HDop`] ?? null;
     if (epoch.NAV && epoch.NAV2 && isNewer(iTow, positionComparisonState.pair?.NAV)) positionComparisonState.pair = { NAV: epoch.NAV, NAV2: epoch.NAV2 };
+    while (positionComparisonState.epochs.size > 60) positionComparisonState.epochs.delete(positionComparisonState.epochs.keys().next().value);
+    if (!replayRebuilding) renderPositionComparison();
+  }
+
+  function parseNavDop(payload, source = "NAV") {
+    if (payload.length < 18 || !["NAV", "NAV2"].includes(source)) return;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const iTow = data.getUint32(0, true);
+    if (iTow >= 604800000) return;
+    if (!positionComparisonState.epochs.has(iTow)) positionComparisonState.epochs.set(iTow, {});
+    const epoch = positionComparisonState.epochs.get(iTow);
+    const hDop = data.getUint16(12, true) / 100;
+    epoch[`${source}HDop`] = hDop;
+    if (epoch[source]) epoch[source].hDop = hDop;
     while (positionComparisonState.epochs.size > 60) positionComparisonState.epochs.delete(positionComparisonState.epochs.keys().next().value);
     if (!replayRebuilding) renderPositionComparison();
   }
@@ -1130,6 +1161,8 @@
     const rows = [
       ["Fix", (fix) => `${fixNames[fix.fixType] || "Unknown"}${fix.positionValid ? "" : " (invalid)"}`],
       ["Corrections", correction], ["Satellites", (fix) => fix.satellites],
+      ["PDOP", (fix) => Number.isFinite(fix.pDop) && fix.pDop > 0 ? fix.pDop.toFixed(2) : "--"],
+      ["HDOP", (fix) => Number.isFinite(fix.hDop) && fix.hDop > 0 ? fix.hDop.toFixed(2) : "--"],
       ["Horizontal accuracy", (fix) => `${fix.hAcc.toFixed(3)} m`],
       ["Vertical accuracy", (fix) => fix.fixType >= 3 && fix.fixType <= 4 ? `${fix.vAcc.toFixed(3)} m` : "n/a"],
     ];
@@ -1314,8 +1347,111 @@
     hasNav2Count.textContent = format(hasCorrectionReports.NAV2, "NAV2");
   }
 
+  function satelliteGnssName(gnssId) {
+    return ["GPS", "SBAS", "Galileo", "BeiDou", "IMES", "QZSS", "GLONASS", "NavIC"][gnssId] || `GNSS ${gnssId}`;
+  }
+
+  function resetSatelliteReports() {
+    satelliteReports.NAV = null; satelliteReports.NAV2 = null;
+    renderSatellites();
+  }
+
+  function selectedSatellites(report, constellations, sort, usedOnly = false) {
+    const identity = (satellite) => satellite.gnssId * 256 + satellite.svId;
+    const value = (satellite) => sort.key === "id" ? identity(satellite) : satellite[sort.key];
+    return (report?.satellites || []).filter((satellite) => constellations.has(satellite.gnssId) && (!usedOnly || satellite.used)).sort((left, right) => {
+      const leftValue = value(left); const rightValue = value(right);
+      if (leftValue === null || leftValue === undefined) return rightValue === null || rightValue === undefined ? identity(left) - identity(right) : 1;
+      if (rightValue === null || rightValue === undefined) return -1;
+      return (Number(leftValue) - Number(rightValue)) * sort.direction || identity(left) - identity(right);
+    });
+  }
+
+  function renderSatellites(now = Date.now()) {
+    satelliteSource.querySelector('option[value="NAV2"]').disabled = receiver.value !== "x20";
+    if (receiver.value !== "x20" && satelliteSource.value === "NAV2") satelliteSource.value = "NAV";
+    if (satellitesPanel.hidden) return;
+    const source = satelliteSource.value; const report = satelliteReports[source];
+    const satellites = selectedSatellites(report, satelliteConstellations, satelliteSort, satelliteUsedOnly.checked);
+    const stale = report && !replayData && now - report.receivedAt > 5000;
+    satelliteStatus.dataset.state = !report ? "waiting" : stale ? "stale" : "current";
+    satelliteStatus.textContent = !report ? `Waiting for ${source}-SAT` : `${source}-SAT | iTOW ${report.iTow} ms${stale ? ` | stale (${((now - report.receivedAt) / 1000).toFixed(1)} s)` : ""}${replayData ? " | recorded" : ""}`;
+    satelliteCount.textContent = report ? `${satellites.length} shown / ${report.satellites.length} reported | ${satellites.filter((satellite) => satellite.used).length} used` : "0 reported";
+    const health = ["Unknown", "Healthy", "Unhealthy", "Reserved"];
+    const emptyMessage = !report ? "Waiting for satellite data." : !report.satellites.length ? "No satellites reported." : satelliteUsedOnly.checked ? "No used satellites match the constellation filters." : "No satellites match the constellation filters.";
+    satelliteRows.innerHTML = satellites.length ? satellites.map((satellite) => `<tr><th scope="row" style="color:${gnssColor(satellite.gnssId)}">${satelliteGnssName(satellite.gnssId)} ${satellite.svId}</th><td>${satellite.cno}</td><td>${satellite.elevation === null ? "--" : `${satellite.elevation}\u00b0`}</td><td>${satellite.azimuth === null ? "--" : `${satellite.azimuth}\u00b0`}</td><td>${satellite.used ? "Used" : satellite.quality >= 4 ? "Tracked" : satellite.quality >= 2 ? "Acquired" : satellite.quality === 1 ? "Searching" : "No signal"}</td><td>${health[satellite.health]}</td></tr>`).join("") : `<tr><td colspan="6">${emptyMessage}</td></tr>`;
+    for (const button of satelliteTable.querySelectorAll("[data-sort]")) {
+      const active = button.dataset.sort === satelliteSort.key;
+      button.closest("th").setAttribute("aria-sort", active ? satelliteSort.direction === 1 ? "ascending" : "descending" : "none");
+      button.querySelector(".material-symbols-outlined").textContent = active ? satelliteSort.direction === 1 ? "arrow_upward" : "arrow_downward" : "unfold_more";
+    }
+    drawSatelliteSky(satellites);
+  }
+
+  function drawSatelliteSky(satellites) {
+    const { width, height } = sizeCanvas(satelliteSky); const context = satelliteSky.getContext("2d");
+    const dpr = window.devicePixelRatio || 1; const centerX = width / 2; const centerY = height / 2;
+    const radius = Math.max(1, Math.min(width, height) / 2 - 36 * dpr);
+    context.fillStyle = "#090c12"; context.fillRect(0, 0, width, height);
+    context.lineWidth = dpr; context.font = `${11 * dpr}px "Segoe UI", sans-serif`; context.textAlign = "center"; context.textBaseline = "middle";
+    for (const elevation of [0, 30, 60]) {
+      const ring = radius * (90 - elevation) / 90;
+      context.strokeStyle = "#354154"; context.beginPath(); context.arc(centerX, centerY, ring, 0, Math.PI * 2); context.stroke();
+      context.fillStyle = "#9ba8bc"; context.fillText(`${elevation}\u00b0`, centerX + 14 * dpr, centerY - ring + 9 * dpr);
+    }
+    context.strokeStyle = "#354154"; context.beginPath(); context.moveTo(centerX - radius, centerY); context.lineTo(centerX + radius, centerY); context.moveTo(centerX, centerY - radius); context.lineTo(centerX, centerY + radius); context.stroke();
+    context.fillStyle = "#e5e9f0";
+    for (const [label, azimuth] of [["N", 0], ["E", 90], ["S", 180], ["W", 270]]) {
+      const radians = azimuth * Math.PI / 180; context.fillText(label, centerX + Math.sin(radians) * (radius + 20 * dpr), centerY - Math.cos(radians) * (radius + 20 * dpr));
+    }
+    satelliteSkyPoints = [];
+    const labels = [0, 30, 60].map((elevation) => ({ x: centerX + 2 * dpr, y: centerY - radius * (90 - elevation) / 90 + 2 * dpr, width: 26 * dpr, height: 14 * dpr }));
+    for (const azimuth of [0, 90, 180, 270]) {
+      const radians = azimuth * Math.PI / 180;
+      labels.push({ x: centerX + Math.sin(radians) * (radius + 20 * dpr) - 8 * dpr, y: centerY - Math.cos(radians) * (radius + 20 * dpr) - 7 * dpr, width: 16 * dpr, height: 14 * dpr });
+    }
+    for (const satellite of [...satellites].sort((left, right) => Number(right.used) - Number(left.used))) {
+      const point = satelliteSkyPoint(satellite, centerX, centerY, radius);
+      if (!point) continue;
+      satelliteSkyPoints.push({ ...point, satellite });
+      const color = gnssColor(satellite.gnssId);
+      context.beginPath(); context.arc(point.x, point.y, 5 * dpr, 0, Math.PI * 2); context.lineWidth = 1.5 * dpr; context.strokeStyle = color; context.fillStyle = satellite.used ? color : "#090c12"; context.fill(); context.stroke();
+      const text = `${["G", "S", "E", "C", "I", "J", "R", "N"][satellite.gnssId] || "?"}${satellite.svId}`;
+      const labelWidth = context.measureText(text).width; const labelHeight = 12 * dpr;
+      const candidates = [[point.x + 8 * dpr, point.y - 14 * dpr], [point.x - labelWidth - 8 * dpr, point.y - 14 * dpr], [point.x + 8 * dpr, point.y + 4 * dpr], [point.x - labelWidth - 8 * dpr, point.y + 4 * dpr]];
+      const position = candidates.find(([x, y]) => x >= 0 && x + labelWidth <= width && y >= 0 && y + labelHeight <= height && !labels.some((box) => x < box.x + box.width && x + labelWidth > box.x && y < box.y + box.height && y + labelHeight > box.y));
+      if (position) {
+        labels.push({ x: position[0], y: position[1], width: labelWidth, height: labelHeight });
+        context.fillStyle = color; context.textAlign = "left"; context.textBaseline = "top"; context.fillText(text, position[0], position[1]);
+      }
+    }
+  }
+
+  function decodeSatelliteReport(payload) {
+    if (payload.length < 8 || payload[4] !== 1) return null;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const satellites = [];
+    const count = Math.min(payload[5], Math.floor((payload.length - 8) / 12));
+    for (let index = 0; index < count; index++) {
+      const offset = 8 + index * 12; const flags = data.getUint32(offset + 8, true);
+      const elevation = data.getInt8(offset + 3); const azimuth = data.getInt16(offset + 4, true);
+      satellites.push({ gnssId: payload[offset], svId: payload[offset + 1], cno: payload[offset + 2], elevation: Math.abs(elevation) <= 90 ? elevation : null, azimuth: Math.abs(elevation) <= 90 && azimuth >= 0 && azimuth <= 360 ? azimuth : null, used: Boolean(flags & 8), quality: flags & 7, health: (flags >> 4) & 3 });
+    }
+    return { iTow: data.getUint32(0, true), satellites };
+  }
+
+  function satelliteSkyPoint(satellite, centerX, centerY, radius) {
+    if (satellite.elevation === null || satellite.azimuth === null || satellite.elevation < 0) return null;
+    const distance = radius * (90 - satellite.elevation) / 90;
+    const radians = satellite.azimuth * Math.PI / 180;
+    return { x: centerX + Math.sin(radians) * distance, y: centerY - Math.cos(radians) * distance };
+  }
+
   function parseNavSat(payload, solution = "NAV") {
     if (payload.length < 8) return;
+    const report = decodeSatelliteReport(payload);
+    if (report) satelliteReports[solution] = { ...report, receivedAt: Date.now() };
+    if (!replayRebuilding) renderSatellites();
     const count = Math.min(payload[5], Math.floor((payload.length - 8) / 12)); const epoch = ++signalEpoch.cno;
     const hasCounts = parseHasCorrectionCounts(payload);
     if (hasCounts) hasCorrectionReports[solution] = { ...hasCounts, receivedAt: Date.now() };
@@ -1812,6 +1948,7 @@
     if (messageClass === 0x13 && messageId === 0x60) receiveMgaAck(payload);
     if (messageClass === 0x0a && messageId === 0x31) parseMonSpan(payload);
     if (messageClass === 0x01 && messageId === 0x07) parseNavPvt(payload);
+    if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x04) parseNavDop(payload, messageClass === 0x29 ? "NAV2" : "NAV");
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x21) parseNavTimeUtc(payload);
     if (messageClass === 0x01 && messageId === 0x35) parseNavSat(payload, "NAV");
     if (messageClass === 0x01 && messageId === 0x43) parseNavSig(payload);
@@ -2206,6 +2343,7 @@
         ["Navigation rate", 0x30210002, 1, 2],
         ["MON-SPAN UART1", 0x2091038c, 1, 1],
         ["NAV-PVT UART1", 0x20910007, 1, 1],
+        ["NAV-DOP UART1", 0x20910039, 1, 1],
         ["NAV-TIMEUTC UART1", 0x2091005c, 1, 1],
         ["NAV-SAT UART1", 0x20910016, 1, 1],
         ["NAV-STATUS UART1", 0x2091001b, 1, 1],
@@ -2227,6 +2365,7 @@
         ["QZSS enabled", 0x10310024, 1, 4],
         ["QZSS L1CA enabled", 0x10310012, 1, 4], ["QZSS L2C enabled", 0x10310015, 1, 4], ["QZSS L5 enabled", 0x10310017, 1, 4],
         ["NAV2-PVT UART1", 0x20910491, 1, 1],
+        ["NAV2-DOP UART1", 0x20910466, 1, 1],
         ["NAV2-SAT UART1", 0x20910496, 1, 1],
         ["NAV2-SIG UART1", 0x20910506, 1, 1],
         ["NAV2-TIMEGAL UART1", 0x20910531, 1, 1],
@@ -2326,6 +2465,7 @@
   function replayFrameGroup(messageClass, messageId) {
     if (messageClass === 0x0a && messageId === 0x31) return "span";
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x07) return "position";
+    if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x04) return "dop";
     if ((messageClass === 0x01 || messageClass === 0x29) && (messageId === 0x35 || messageId === 0x43)) return "cno";
     if (messageClass === 0x02 && messageId === 0x15) return "rawx";
     if (messageClass === 0x0a && messageId === 0x38) return "monrf";
@@ -2357,7 +2497,7 @@
     replaySeekAnimationFrame = null; resetReplayDerivedViews(false);
     let frameEnd = 0;
     while (frameEnd < replayFrames.length && replayFrames[frameEnd].end <= offset) frameEnd += 1;
-    const limits = { span: Math.max(settings.waterfallMinutes * WATERFALL_ROWS_PER_MINUTE, settings.averageFrames), position: 3600, cno: HISTORY_LENGTH * 2, rawx: HISTORY_LENGTH, monrf: 3600, system: 1, comms: 2, navstatus: 3600, secsig: 3600, secsiglog: 25, osnma: 3600, osnmaStatus: 600 };
+    const limits = { span: Math.max(settings.waterfallMinutes * WATERFALL_ROWS_PER_MINUTE, settings.averageFrames), position: 3600, dop: 3600, cno: HISTORY_LENGTH * 2, rawx: HISTORY_LENGTH, monrf: 3600, system: 1, comms: 2, navstatus: 3600, secsig: 3600, secsiglog: 25, osnma: 3600, osnmaStatus: 600 };
     const counts = {}; const selectedFrames = [];
     for (let index = frameEnd - 1; index >= 0; index--) {
       const frame = replayFrames[index]; const count = counts[frame.group] || 0;
@@ -2370,7 +2510,7 @@
     } finally { replayRebuilding = false; }
     blockViews.forEach((view) => draw(view));
     if (positionFixes.length) { drawPositionTrack(); if (!positionPanel.hidden) updatePositionMap(positionFixes[positionFixes.length - 1]); }
-    drawSignals(); renderOsnma(); renderReceiverLoad(); renderReceiverTx(); renderPositionComparison();
+    drawSignals(); renderOsnma(); renderReceiverLoad(); renderReceiverTx(); renderPositionComparison(); renderSatellites();
     setStatus(`Replay paused at ${replayData?.length ? Math.round(offset * 100 / replayData.length) : 0}%`);
   }
   function scheduleReplayViewRebuild(offset) {
@@ -2523,6 +2663,7 @@
       await selectedPort.open({ baudRate: rate, bufferSize: 1 << 20 });
       port = selectedPort; writer = port.writable.getWriter(); reading = true;
       resetLocalClock();
+      resetSatelliteReports();
       resetPositionComparison();
       receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
@@ -2530,7 +2671,7 @@
     } catch (error) { setStatus(`Connection failed: ${error.message}`); }
     finally { connectButton.disabled = false; }
   }
-  async function disconnect() { reading = false; resetLocalClock(); resetPositionComparison(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
+  async function disconnect() { reading = false; resetLocalClock(); resetPositionComparison(); resetSatelliteReports(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
 
   connectButton.addEventListener("click", () => port ? disconnect() : connect());
   recordButton.addEventListener("click", () => isRecording() ? stopRecording() : startRecording());
@@ -2560,6 +2701,29 @@
   window.addEventListener("resize", clampPlaybackPosition);
   receiver.addEventListener("change", () => { settings.lastReceiver = receiver.value; saveSettings(); syncReceiverBaud(); updateGnssIntegritySettingsForm(); syncPositionSourceForm(); renderHasDiagnostics(); resetPositionSourceDisplay(); });
   receiver.addEventListener("change", resetPositionComparison);
+  receiver.addEventListener("change", resetSatelliteReports);
+  satelliteFilters.innerHTML = [...satelliteConstellations].map((id) => `<label class="constellation" style="--constellation-color:${gnssColor(id)}"><input type="checkbox" value="${id}" checked> ${satelliteGnssName(id)}</label>`).join("");
+  satelliteFilters.addEventListener("change", (event) => {
+    if (!event.target.matches('input[type="checkbox"]')) return;
+    const id = Number(event.target.value);
+    if (event.target.checked) satelliteConstellations.add(id); else satelliteConstellations.delete(id);
+    renderSatellites();
+  });
+  satelliteSource.addEventListener("change", () => renderSatellites());
+  satelliteUsedOnly.addEventListener("change", () => renderSatellites());
+  satelliteTable.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-sort]");
+    if (!button) return;
+    satelliteSort.direction = satelliteSort.key === button.dataset.sort ? -satelliteSort.direction : ["cno", "elevation", "used"].includes(button.dataset.sort) ? -1 : 1;
+    satelliteSort.key = button.dataset.sort; renderSatellites();
+  });
+  satelliteSky.addEventListener("pointermove", (event) => {
+    const bounds = satelliteSky.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
+    const x = (event.clientX - bounds.left) * dpr; const y = (event.clientY - bounds.top) * dpr;
+    const point = satelliteSkyPoints.find((candidate) => Math.hypot(candidate.x - x, candidate.y - y) <= 10 * dpr);
+    satelliteSky.title = point ? `${satelliteGnssName(point.satellite.gnssId)} ${point.satellite.svId}: ${point.satellite.cno} dB-Hz, elevation ${point.satellite.elevation}, azimuth ${point.satellite.azimuth}${point.satellite.used ? ", used in solution" : ""}` : "Satellite sky view";
+  });
+  new ResizeObserver(() => { if (!satellitesPanel.hidden) renderSatellites(); }).observe(satelliteSky);
   baud.addEventListener("change", () => { if (baud.value !== "auto") { settings.baudByReceiver[receiver.value] = Number(baud.value); saveSettings(); } });
   receiver.value = settings.lastReceiver;
   syncReceiverBaud();
@@ -2573,6 +2737,7 @@
   refreshOsnmaClock();
   setInterval(refreshOsnmaIndicators, 1000);
   setInterval(renderHasDiagnostics, 1000);
+  setInterval(renderSatellites, 1000);
   setInterval(renderPositionComparison, 1000);
   setInterval(renderReceiverLoad, 1000);
   setInterval(renderReceiverTx, 1000);
@@ -2591,10 +2756,12 @@
   osnmaFolderPicker.addEventListener("change", provisionOsnmaFolder);
   function activateTab(active) {
     const showPosition = active === "position";
+    const showSatellites = active === "satellites";
     const showSignals = active === "signals";
     const showOsnma = active === "osnma";
-    spectrumTab.classList.toggle("active", !showPosition && !showSignals && !showOsnma); spectrumTab.setAttribute("aria-selected", String(!showPosition && !showSignals && !showOsnma)); spectrumPanel.hidden = showPosition || showSignals || showOsnma;
+    spectrumTab.classList.toggle("active", !showPosition && !showSatellites && !showSignals && !showOsnma); spectrumTab.setAttribute("aria-selected", String(!showPosition && !showSatellites && !showSignals && !showOsnma)); spectrumPanel.hidden = showPosition || showSatellites || showSignals || showOsnma;
     positionTab.classList.toggle("active", showPosition); positionTab.setAttribute("aria-selected", String(showPosition)); positionPanel.hidden = !showPosition;
+    satellitesTab.classList.toggle("active", showSatellites); satellitesTab.setAttribute("aria-selected", String(showSatellites)); satellitesPanel.hidden = !showSatellites;
     signalsTab.classList.toggle("active", showSignals); signalsTab.setAttribute("aria-selected", String(showSignals)); signalsPanel.hidden = !showSignals;
     osnmaTab.classList.toggle("active", showOsnma); osnmaTab.setAttribute("aria-selected", String(showOsnma)); osnmaPanel.hidden = !showOsnma;
     if (showPosition) {
@@ -2602,9 +2769,11 @@
       if (positionMap) positionMap.invalidateSize(); else if (mapLibreMap) mapLibreMap.resize(); else if (positionFixes.length) updatePositionMap(positionFixes[positionFixes.length - 1]);
     }
     if (showSignals) drawSignals();
+    if (showSatellites) renderSatellites();
   }
   spectrumTab.addEventListener("click", () => activateTab("spectrum"));
   positionTab.addEventListener("click", () => activateTab("position"));
+  satellitesTab.addEventListener("click", () => activateTab("satellites"));
   signalsTab.addEventListener("click", () => activateTab("signals"));
   osnmaTab.addEventListener("click", () => activateTab("osnma"));
   constellationFilter.addEventListener("change", (event) => {

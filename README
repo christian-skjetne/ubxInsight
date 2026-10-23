@@ -93,6 +93,18 @@ message order and content, but not the original host-side timing between serial 
 
 Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 
+### Satellite sky view:
+- The Satellites tab, between Position and GNSS Signals, uses the already enabled
+	NAV-SAT/NAV2-SAT messages; no additional receiver traffic is requested.
+- Select NAV or NAV2 (X20 only) and filter constellations. Each source retains its
+	own latest snapshot. The sky plot places north at the top, east on the right,
+	the horizon at the outer ring, and zenith at the center. Filled markers are used
+	in the selected solution; outlined markers are not. Hover markers for details.
+- The sortable table includes C/N0, elevation, azimuth, tracking/use and health.
+	Unknown positions and below-horizon satellites remain in the table but are not
+	plotted. Live reports become stale after five seconds; replay is labelled recorded.
+	Connection, receiver and replay resets clear snapshots. NAV/NAV2 are never merged.
+
 ### NAV/NAV2 position comparison:
 - On X20, the Position tab compares NAV-PVT and NAV2-PVT at identical `iTOW`
 	epochs, independently of the selected track/map source. Up to 60 epochs are
@@ -104,6 +116,11 @@ Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 	horizontal/vertical accuracy. Missing, invalid, unmatched, and stale data are
 	labelled; live matched samples become stale after five seconds. Replay is labelled
 	recorded, not live. Connection changes and replay resets clear the comparison.
+- Solution quality also shows dimensionless PDOP from each PVT report and HDOP
+	from NAV-DOP/NAV2-DOP at the identical `iTOW`. DOP reports are enabled at 1 Hz
+	on configured interfaces (NAV2-DOP on X20 only). Either arrival order is supported;
+	unavailable or zero-valued DOP reads `--`. DOP describes satellite geometry,
+	not measured position error or signal authenticity.
 - NAV2 is GNSS standalone and can legitimately differ from the primary solution.
 	No spoofing threshold is inferred: differing correction/filter/authentication
 	policies can cause separation, while shared signal attacks may move both solutions

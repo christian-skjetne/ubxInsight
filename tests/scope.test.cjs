@@ -551,6 +551,154 @@ test("Configure all receiver interfaces controls X20 output routing", () => {
   }
 });
 
+test("satellite reports decode signed sky coordinates and usage without mixing entries", () => {
+  const context = loadFunctions(["decodeSatelliteReport", "satelliteSkyPoint"], {});
+  const bytes = new Uint8Array(52).subarray(4, 48); bytes[4] = 1; bytes[5] = 3;
+  const data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  data.setUint32(0, 123000, true);
+  for (const [index, elevation, azimuth, flags] of [[0, 45, 90, 8 | 4 | 16], [1, -5, 180, 3], [2, 91, -1, 0]]) {
+    const offset = 8 + index * 12; bytes[offset] = 2; bytes[offset + 1] = index + 1; bytes[offset + 2] = 42;
+    data.setInt8(offset + 3, elevation); data.setInt16(offset + 4, azimuth, true); data.setUint32(offset + 8, flags, true);
+  }
+  const report = context.decodeSatelliteReport(bytes);
+  assert.equal(report.iTow, 123000);
+  assert.equal(report.satellites.length, 3);
+  assert.equal(report.satellites[0].used, true);
+  assert.equal(report.satellites[0].quality, 4);
+  assert.equal(report.satellites[0].health, 1);
+  assert.equal(report.satellites[1].elevation, -5);
+  assert.equal(report.satellites[2].elevation, null);
+  assert.equal(context.satelliteSkyPoint(report.satellites[1], 100, 100, 90), null);
+  assert.equal(context.satelliteSkyPoint(report.satellites[2], 100, 100, 90), null);
+  const east = context.satelliteSkyPoint(report.satellites[0], 100, 100, 90);
+  assert.equal(east.x, 145); assert.ok(Math.abs(east.y - 100) < 0.0001);
+  const north = context.satelliteSkyPoint({ elevation: 0, azimuth: 0 }, 100, 100, 90);
+  assert.equal(north.x, 100); assert.equal(north.y, 10);
+  const zenith = context.satelliteSkyPoint({ elevation: 90, azimuth: 270 }, 100, 100, 90);
+  assert.equal(zenith.x, 100); assert.equal(zenith.y, 100);
+  assert.equal(context.decodeSatelliteReport(new Uint8Array(7)), null);
+  bytes[4] = 2;
+  assert.equal(context.decodeSatelliteReport(bytes), null);
+});
+
+test("sky labels avoid elevation captions and omit below-horizon markers", () => {
+  const labels = [];
+  const drawing = new Proxy({ fillText(text, x, y) { labels.push({ text, x, y }); }, measureText: () => ({ width: 14 }) }, {
+    get(target, property) { return target[property] ?? (() => {}); },
+  });
+  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "gnssColor"], {
+    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
+  });
+  context.drawSatelliteSky([
+    { gnssId: 0, svId: 1, elevation: 10, azimuth: 0, used: true },
+    { gnssId: 2, svId: 2, elevation: -5, azimuth: 90, used: false },
+  ]);
+  assert.equal(context.satelliteSkyPoints.length, 1);
+  assert.ok(labels.find((label) => label.text === "G1").x < 300);
+  for (const cardinal of ["N", "E", "S", "W"]) assert.ok(labels.some((label) => label.text === cardinal));
+  assert.ok(!labels.some((label) => label.text === "E2"));
+});
+
+test("satellite filters and numeric sorting keep unknown positions last", () => {
+  const context = loadFunctions(["selectedSatellites"], {});
+  const report = { satellites: [
+    { gnssId: 2, svId: 10, elevation: null, cno: 40 },
+    { gnssId: 0, svId: 3, elevation: 15, cno: 20 },
+    { gnssId: 2, svId: 2, elevation: 60, cno: 45 },
+  ] };
+  const all = new Set([0, 2]);
+  assert.deepEqual(Array.from(context.selectedSatellites(report, all, { key: "id", direction: 1 }), (satellite) => satellite.svId), [3, 2, 10]);
+  assert.deepEqual(Array.from(context.selectedSatellites(report, all, { key: "elevation", direction: -1 }), (satellite) => satellite.svId), [2, 3, 10]);
+  assert.deepEqual(Array.from(context.selectedSatellites(report, all, { key: "elevation", direction: 1 }), (satellite) => satellite.svId), [3, 2, 10]);
+  assert.equal(context.selectedSatellites(report, new Set([2]), { key: "cno", direction: -1 })[0].svId, 2);
+  assert.equal(context.selectedSatellites(report, new Set(), { key: "id", direction: 1 }).length, 0);
+  assert.equal(report.satellites[0].svId, 10);
+  report.satellites[1].used = true;
+  assert.deepEqual(Array.from(context.selectedSatellites(report, all, { key: "id", direction: 1 }, true), (satellite) => satellite.svId), [3]);
+  assert.equal(context.selectedSatellites(report, new Set([2]), { key: "id", direction: 1 }, true).length, 0);
+  assert.equal(context.selectedSatellites(report, all, { key: "id", direction: 1 }, false).length, 3);
+});
+
+test("NAV-SAT snapshots remain separate for each solution and empty reports clear old satellites", () => {
+  const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "resetSatelliteReports"], {
+    satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
+    signalEpoch: { cno: 0 }, signalHistory: { cno: new Map() }, replayRebuilding: false,
+    signalsEmpty: {}, renderSatellites() {}, renderHasDiagnostics() {}, drawSignals() {}, appendSeries() {}, gnssColor() {},
+  });
+  const payload = new Uint8Array(20); payload[4] = 1; payload[5] = 1; payload[8] = 2; payload[9] = 12;
+  context.parseNavSat(payload, "NAV");
+  payload[9] = 24;
+  context.parseNavSat(payload, "NAV2");
+  assert.equal(context.satelliteReports.NAV.satellites[0].svId, 12);
+  assert.equal(context.satelliteReports.NAV2.satellites[0].svId, 24);
+  const empty = new Uint8Array(8); empty[4] = 1;
+  context.parseNavSat(empty, "NAV");
+  assert.equal(context.satelliteReports.NAV.satellites.length, 0);
+  assert.equal(context.satelliteReports.NAV2.satellites.length, 1);
+  context.resetSatelliteReports();
+  assert.equal(context.satelliteReports.NAV, null);
+  assert.equal(context.satelliteReports.NAV2, null);
+});
+
+test("satellites view marks stale data and preserves recorded source selection", () => {
+  const option = {};
+  const source = { value: "NAV", querySelector: () => option };
+  const context = loadFunctions(["renderSatellites", "selectedSatellites", "satelliteGnssName"], {
+    satelliteSource: source, satellitesPanel: { hidden: false }, receiver: { value: "x20" },
+    satelliteUsedOnly: { checked: false },
+    satelliteReports: { NAV: { iTow: 1000, receivedAt: 1000, satellites: [{ gnssId: 2, svId: 12, cno: 42, elevation: 45, azimuth: 90, used: true, quality: 4, health: 1 }] }, NAV2: null },
+    satelliteConstellations: new Set([2]), satelliteSort: { key: "id", direction: 1 },
+    satelliteStatus: { dataset: {} }, satelliteCount: {}, satelliteRows: {}, satelliteTable: { querySelectorAll: () => [] },
+    replayData: null, gnssColor: () => "#66ff88", drawSatelliteSky() {},
+  });
+  context.renderSatellites(1000);
+  assert.match(context.satelliteRows.innerHTML, /Galileo 12.*42.*Used.*Healthy/);
+  assert.match(context.satelliteCount.textContent, /1 shown.*1 reported.*1 used/);
+  context.satelliteReports.NAV.satellites.push({ gnssId: 2, svId: 24, cno: 30, elevation: 20, azimuth: 180, used: false, quality: 4, health: 1 });
+  context.satelliteUsedOnly.checked = true;
+  context.renderSatellites(1000);
+  assert.match(context.satelliteCount.textContent, /1 shown.*2 reported.*1 used/);
+  assert.doesNotMatch(context.satelliteRows.innerHTML, /Galileo 24/);
+  context.satelliteUsedOnly.checked = false;
+  context.renderSatellites(1000);
+  assert.match(context.satelliteRows.innerHTML, /Galileo 24/);
+  context.renderSatellites(7000);
+  assert.equal(context.satelliteStatus.dataset.state, "stale");
+  context.replayData = new Uint8Array(1);
+  context.renderSatellites(7000);
+  assert.equal(context.satelliteStatus.dataset.state, "current");
+  assert.match(context.satelliteStatus.textContent, /recorded/);
+  source.value = "NAV2";
+  context.renderSatellites(7000);
+  assert.match(context.satelliteStatus.textContent, /Waiting for NAV2-SAT/);
+  context.receiver.value = "f9p";
+  context.renderSatellites(7000);
+  assert.equal(source.value, "NAV");
+  assert.equal(option.disabled, true);
+  context.satelliteConstellations.clear();
+  context.renderSatellites(7000);
+  assert.match(context.satelliteRows.innerHTML, /No satellites match/);
+  context.satelliteUsedOnly.checked = true;
+  context.renderSatellites(7000);
+  assert.match(context.satelliteRows.innerHTML, /No used satellites match/);
+});
+
+test("satellites tab activates between the existing views without leaving another panel visible", () => {
+  const tab = () => ({ classList: { toggle() {} }, setAttribute(name, value) { this[name] = value; } });
+  const context = loadFunctions(["activateTab"], {
+    spectrumTab: tab(), positionTab: tab(), satellitesTab: tab(), signalsTab: tab(), osnmaTab: tab(),
+    spectrumPanel: {}, positionPanel: {}, satellitesPanel: {}, signalsPanel: {}, osnmaPanel: {},
+    renderSatellites() {}, drawSignals() {},
+  });
+  context.activateTab("satellites");
+  assert.equal(context.satellitesPanel.hidden, false);
+  assert.equal(context.satellitesTab["aria-selected"], "true");
+  for (const panel of [context.spectrumPanel, context.positionPanel, context.signalsPanel, context.osnmaPanel]) assert.equal(panel.hidden, true);
+  context.activateTab("signals");
+  assert.equal(context.satellitesPanel.hidden, true);
+  assert.equal(context.signalsPanel.hidden, false);
+});
+
 test("NAV-SAT HAS correction flags count GPS and Galileo independently", () => {
   const context = loadFunctions(["parseHasCorrectionCounts"], { DataView });
   const payload = new Uint8Array(8 + 4 * 12);
@@ -723,6 +871,68 @@ test("position comparison buffers delayed epochs and rejects invalid fixes witho
   assert.equal(state.pair.NAV.iTow, 0);
 });
 
+test("receiver configuration enables NAV-DOP and X20 NAV2-DOP at one epoch per report", async () => {
+  const requests = [];
+  const context = loadFunctions(["configureMonSpan", "receiverInterfaceRequests", "gnssFeatureConfigurationRequests", "receiverMonitoringConfigurationRequests"], {
+    writer: {}, configureButton: {}, receiver: { value: "x20" },
+    settings: { configureAllInterfaces: true, enableOsnma: false, enableGalHas: false },
+    osnmaClockSettings: { useComputerClock: false }, configurationStatus: { setAttribute() {} }, configurationTooltip: {},
+    trustedClockSample: null, osnmaTrustedTimeStatus: {}, showConfigResults() {}, startSecSigPolling() {}, refreshLocalClock() {},
+    setStatus(message) { assert.doesNotMatch(message, /failed/i); },
+    async sendValset(...request) { requests.push(request); return "ack"; },
+  });
+  await context.configureMonSpan();
+  assert.ok(requests.some(([name, key, rate, size]) => name === "NAV-DOP UART1" && key === 0x20910039 && rate === 1 && size === 1));
+  assert.ok(requests.some(([name, key, rate]) => name === "NAV-DOP USB" && key === 0x2091003b && rate === 1));
+  assert.ok(requests.some(([name, key, rate]) => name === "NAV2-DOP USB" && key === 0x20910468 && rate === 1));
+  assert.equal(requests.filter(([name]) => name.includes("-DOP ")).length, 6);
+  requests.length = 0;
+  context.receiver.value = "f9p";
+  await context.configureMonSpan();
+  assert.equal(requests.filter(([name]) => name.includes("NAV2-DOP")).length, 0);
+  assert.equal(requests.filter(([name]) => name.startsWith("NAV-DOP ")).length, 3);
+});
+
+test("DOP values are scaled and paired by epoch and source regardless of arrival order", () => {
+  const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
+  const context = loadFunctions(["recordPositionSolution", "parseNavDop", "resetPositionComparison", "handleUbx", "replayFrameGroup"], {
+    positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {},
+  });
+  const pvt = (tow, pDop) => {
+    const payload = new Uint8Array(92); const data = new DataView(payload.buffer);
+    data.setUint32(0, tow, true); payload[20] = 3; payload[21] = 1; data.setUint16(76, pDop, true);
+    return payload;
+  };
+  const dop = (tow, hDop) => {
+    const payload = new Uint8Array(18); const data = new DataView(payload.buffer);
+    data.setUint32(0, tow, true); data.setUint16(12, hDop, true);
+    return payload;
+  };
+  context.handleUbx(0x01, 0x04, dop(1000, 82));
+  context.recordPositionSolution(pvt(1000, 156), "NAV");
+  context.recordPositionSolution(pvt(1000, 234), "NAV2");
+  assert.equal(state.pair.NAV.pDop, 1.56);
+  assert.equal(state.pair.NAV.hDop, 0.82);
+  assert.equal(state.pair.NAV2.pDop, 2.34);
+  assert.equal(state.pair.NAV2.hDop, null);
+  context.handleUbx(0x29, 0x04, dop(2000, 950));
+  assert.equal(state.pair.NAV2.hDop, null);
+  context.handleUbx(0x29, 0x04, dop(1000, 123));
+  assert.equal(state.pair.NAV2.hDop, 1.23);
+  assert.equal(state.pair.NAV.hDop, 0.82);
+  context.recordPositionSolution(pvt(2000, 320), "NAV2");
+  assert.equal(state.latest.NAV2.hDop, 9.5);
+  context.parseNavDop(new Uint8Array(17), "NAV");
+  context.parseNavDop(dop(604800000, 100), "NAV");
+  assert.equal(state.epochs.size, 2);
+  assert.equal(context.replayFrameGroup(0x01, 0x04), "dop");
+  assert.equal(context.replayFrameGroup(0x29, 0x04), "dop");
+  for (let epoch = 3; epoch < 100; epoch++) context.parseNavDop(dop(epoch * 1000, 100), "NAV");
+  assert.equal(state.epochs.size, 60);
+  context.resetPositionComparison();
+  assert.equal(state.epochs.size, 0);
+});
+
 test("position comparison renders matching quality, stale and invalid states, and resets", () => {
   const sample = { iTow: 1000, latitude: 0, longitude: 0, height: 100, fixType: 3, positionValid: true, flags: 0x83, satellites: 22, hAcc: 0.02, vAcc: 0.03, receivedAt: 1000 };
   const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
@@ -739,13 +949,15 @@ test("position comparison renders matching quality, stale and invalid states, an
   state.latest.NAV2 = { ...sample, iTow: 2000 };
   context.renderPositionComparison(1000);
   assert.match(context.positionComparisonStatus.textContent, /matching iTOW/);
-  state.latest.NAV2 = { ...sample, longitude: 0.00001, height: 102.5, flags: 1 };
+  state.latest.NAV2 = { ...sample, longitude: 0.00001, height: 102.5, flags: 1, pDop: 2.34, hDop: 1.23 };
   state.pair = { ...state.latest };
   context.renderPositionComparison(1000);
   assert.equal(context.positionComparisonHorizontal.textContent, "1.113 m");
   assert.equal(context.positionComparisonVertical.textContent, "+2.500 m");
   assert.match(context.positionComparisonQuality.innerHTML, /RTK fixed.*Standalone/);
   assert.match(context.positionComparisonQuality.innerHTML, /0.020 m/);
+  assert.match(context.positionComparisonQuality.innerHTML, /PDOP<\/th><td>--<\/td><td>2.34<\/td>/);
+  assert.match(context.positionComparisonQuality.innerHTML, /HDOP<\/th><td>--<\/td><td>1.23<\/td>/);
   state.latest.NAV = { ...sample, iTow: 2000, receivedAt: 1100 };
   context.renderPositionComparison(1100);
   assert.equal(context.positionComparisonStatus.textContent, "Matched epoch");

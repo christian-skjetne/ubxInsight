@@ -55,6 +55,7 @@
     <div class="tabs" role="tablist" aria-label="UBX Scope views">
       <button id="spectrum-tab" class="tab active" role="tab" aria-selected="true" aria-controls="spectrum-panel">Spectrum</button>
       <button id="position-tab" class="tab" role="tab" aria-selected="false" aria-controls="position-panel">Position</button>
+      <button id="satellites-tab" class="tab" role="tab" aria-selected="false" aria-controls="satellites-panel">Satellites</button>
       <button id="signals-tab" class="tab" role="tab" aria-selected="false" aria-controls="signals-panel">GNSS Signals</button>
       <button id="osnma-tab" class="tab" role="tab" aria-selected="false" aria-controls="osnma-panel">OSNMA</button>
     </div>
@@ -82,6 +83,21 @@
         <section id="position-map-view" class="position-view"><header><h2>Live Map</h2><div class="track-legend" aria-label="Track status legend"><span class="track-normal">Normal</span><b aria-hidden="true">|</b><span class="track-warning">Warning</span><b aria-hidden="true">|</b><span class="track-critical">Critical</span></div><button id="position-map-expand" class="secondary track-control" type="button" aria-label="Expand live map" title="Expand live map" aria-haspopup="dialog" aria-expanded="false" aria-controls="position-map-dialog"><span class="material-symbols-outlined" aria-hidden="true">open_in_full</span></button></header><div id="position-map"></div></section>
       </div>
       <p id="position-info">No position data.</p>
+    </section>
+    <section id="satellites-panel" role="tabpanel" aria-labelledby="satellites-tab" hidden>
+      <div class="satellite-toolbar"><label>Solution <select id="satellite-source"><option value="NAV">NAV</option><option value="NAV2">NAV2</option></select></label><label><input id="satellite-used-only" type="checkbox"> Used in solution only</label><span id="satellite-status" data-state="waiting">Waiting for NAV-SAT</span></div>
+      <fieldset id="satellite-constellations"><legend>Constellations</legend></fieldset>
+      <div id="satellite-views">
+        <section class="osnma-data"><header><h2>Satellite Sky View</h2><span>Azimuth / elevation</span></header><canvas id="satellite-sky" aria-label="Satellite azimuth and elevation sky plot"></canvas><div class="satellite-legend"><span class="satellite-marker-used">Used in solution</span><span class="satellite-marker-other">Not used</span></div></section>
+        <section class="osnma-data"><header><h2>Satellites</h2><span id="satellite-count">0 reported</span></header><div class="osnma-table-wrap"><table id="satellite-table"><thead><tr>
+          <th scope="col" aria-sort="ascending"><button type="button" class="satellite-sort" data-sort="id" title="Sort by satellite"><span>Satellite</span><span class="material-symbols-outlined" aria-hidden="true">arrow_upward</span></button></th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="cno" title="Sort by C/N0 (dB-Hz)"><span>C/N0</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="elevation" title="Sort by elevation (degrees)"><span class="satellite-sort-full">Elevation</span><abbr class="satellite-sort-short" title="Elevation (degrees)">El.</abbr><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="azimuth" title="Sort by azimuth (degrees)"><span class="satellite-sort-full">Azimuth</span><abbr class="satellite-sort-short" title="Azimuth (degrees)">Az.</abbr><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="used" title="Sort by solution use"><span>Use</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="health" title="Sort by health"><span>Health</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
+        </tr></thead><tbody id="satellite-rows"><tr><td colspan="6">Waiting for satellite data.</td></tr></tbody></table></div></section>
+      </div>
     </section>
     <section id="signals-panel" role="tabpanel" aria-labelledby="signals-tab" hidden>
       <p id="signals-empty">Waiting for GNSS monitoring data.</p>
