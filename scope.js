@@ -10,7 +10,7 @@
   const LIGHT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
   const SETTINGS_KEY = "ubx-scope-settings-v1";
   const OSNMA_CLOCK_SETTINGS_KEY = "ubx-scope-osnma-clock-v1";
-  const DEFAULT_SETTINGS = { configureAllInterfaces: false, showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: false, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
+  const DEFAULT_SETTINGS = { configureAllInterfaces: false, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: false, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const DEFAULT_OSNMA_CLOCK_SETTINGS = { useComputerClock: false, accuracySeconds: 1, showLocalTime: false };
   const SPECTRUM_MIN_DB = 0;
   const SPECTRUM_MAX_DB = 240;
@@ -39,7 +39,8 @@
   const fixStatus = document.querySelector("#fix-status");
   const gpsTime = document.querySelector("#gps-time");
   const clockOffset = document.querySelector("#clock-offset");
-  const latestPosition = document.querySelector("#latest-position");
+  const latitudeStatus = document.querySelector("#latitude-status");
+  const longitudeStatus = document.querySelector("#longitude-status");
   const altitudeStatus = document.querySelector("#altitude-status");
   const speedStatus = document.querySelector("#speed-status");
   const headingStatus = document.querySelector("#heading-status");
@@ -55,6 +56,12 @@
   const settingsForm = document.querySelector("#settings-form");
   const settingsClose = document.querySelector("#settings-close");
   const settingsReset = document.querySelector("#settings-reset");
+  const enableOsnma = document.querySelector("#enable-osnma");
+  const enableGalHas = document.querySelector("#enable-has");
+  const hasSupportNote = document.querySelector("#has-support-note");
+  const gnssIntegrityWarning = document.querySelector("#gnss-integrity-warning");
+  const positionSourceSelect = document.querySelector("#position-source");
+  const positionSourceNote = document.querySelector("#position-source-note");
   const playbackDialog = document.querySelector("#playback-dialog");
   const playbackHead = document.querySelector("#playback-head");
   const playbackCollapse = document.querySelector("#playback-collapse");
@@ -125,6 +132,12 @@
   const signalCharts = { cno: document.querySelector("#cno-chart"), doppler: document.querySelector("#doppler-chart"), jamState: document.querySelector("#jam-state-chart"), jamIndex: document.querySelector("#jam-index-chart"), agc: document.querySelector("#agc-chart"), spoof: document.querySelector("#spoof-chart"), secState: document.querySelector("#sec-state-chart"), secFrequency: document.querySelector("#sec-frequency-chart") };
   const secSecuritySummary = document.querySelector("#sec-security-summary");
   const secEventLog = document.querySelector("#sec-event-log");
+  const hasDiagnosticsStatus = document.querySelector("#has-diagnostics-status");
+  const hasCoexistWarning = document.querySelector("#has-coexist-warning");
+  const hasNavCount = document.querySelector("#has-nav-count");
+  const hasNav2Count = document.querySelector("#has-nav2-count");
+  const hasNav2Engine = document.querySelector("#has-nav2-engine");
+  const osnmaDisabledBanner = document.querySelector("#osnma-disabled-banner");
   const showAverage = document.querySelector("#show-average");
   const averageFrames = document.querySelector("#average-frames");
   const showPeak = document.querySelector("#show-peak");
@@ -133,7 +146,9 @@
   const receiverBaud = document.querySelector("#receiver-baud");
   const configureAllInterfaces = document.querySelector("#configure-all-interfaces");
   const receiverInterface = document.querySelector("#receiver-interface");
+  const receiverFirmware = document.querySelector("#receiver-firmware");
   let pendingInterfacePoll = null;
+  let receiverFirmwareTimeout = null;
   const waterfallMinutes = document.querySelector("#waterfall-minutes");
   const waterfallMarkerMinutes = document.querySelector("#waterfall-marker-minutes");
   const receiver = document.querySelector("#receiver");
@@ -173,6 +188,7 @@
   let settings = loadSettings();
   let osnmaClockSettings = loadOsnmaClockSettings();
   let positionFixes = [];
+  const hasCorrectionReports = { NAV: null, NAV2: null };
   let positionMap = null;
   let mapLibreMap = null;
   let mapTiles = null;
@@ -204,7 +220,7 @@
       if (!saved || typeof saved !== "object") return { ...DEFAULT_SETTINGS };
       const baudByReceiver = { ...DEFAULT_SETTINGS.baudByReceiver, ...(saved.baudByReceiver || {}) };
       for (const receiverName of Object.keys(baudByReceiver)) baudByReceiver[receiverName] = Number(baudByReceiver[receiverName]) || DEFAULT_SETTINGS.baudByReceiver[receiverName];
-      return { configureAllInterfaces: saved.configureAllInterfaces === true, showAverage: typeof saved.showAverage === "boolean" ? saved.showAverage : DEFAULT_SETTINGS.showAverage, averageFrames: Math.max(1, Math.min(120, Number(saved.averageFrames) || DEFAULT_SETTINGS.averageFrames)), showPeak: typeof saved.showPeak === "boolean" ? saved.showPeak : DEFAULT_SETTINGS.showPeak, peakDecay: Math.max(0, Math.min(30, Number(saved.peakDecay) || 0)), darkMap: typeof saved.darkMap === "boolean" ? saved.darkMap : DEFAULT_SETTINGS.darkMap, waterfallMinutes: Math.max(5, Math.min(30, Number(saved.waterfallMinutes) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(saved.waterfallMarkerMinutes) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), lastReceiver: saved.lastReceiver === "x20" ? "x20" : "f9p", baudByReceiver };
+      return { configureAllInterfaces: saved.configureAllInterfaces === true, enableOsnma: typeof saved.enableOsnma === "boolean" ? saved.enableOsnma : DEFAULT_SETTINGS.enableOsnma, enableGalHas: typeof saved.enableGalHas === "boolean" ? saved.enableGalHas : DEFAULT_SETTINGS.enableGalHas, positionSource: saved.positionSource === "NAV2" ? "NAV2" : DEFAULT_SETTINGS.positionSource, showAverage: typeof saved.showAverage === "boolean" ? saved.showAverage : DEFAULT_SETTINGS.showAverage, averageFrames: Math.max(1, Math.min(120, Number(saved.averageFrames) || DEFAULT_SETTINGS.averageFrames)), showPeak: typeof saved.showPeak === "boolean" ? saved.showPeak : DEFAULT_SETTINGS.showPeak, peakDecay: Math.max(0, Math.min(30, Number(saved.peakDecay) || 0)), darkMap: typeof saved.darkMap === "boolean" ? saved.darkMap : DEFAULT_SETTINGS.darkMap, waterfallMinutes: Math.max(5, Math.min(30, Number(saved.waterfallMinutes) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(saved.waterfallMarkerMinutes) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), lastReceiver: saved.lastReceiver === "x20" ? "x20" : "f9p", baudByReceiver };
     } catch { return { ...DEFAULT_SETTINGS }; }
   }
 
@@ -228,7 +244,20 @@
     refreshOsnmaClock();
   }
   function syncReceiverBaud() { baud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); }
-  function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
+  function updateGnssIntegritySettingsForm() {
+    enableGalHas.disabled = receiver.value !== "x20";
+    enableGalHas.title = receiver.value === "x20" ? "Enable Galileo HAS corrections on a supported X20 receiver." : "The selected F9P does not support Galileo E6 reception required for HAS.";
+    enableGalHas.closest("label").title = enableGalHas.title;
+    hasSupportNote.hidden = receiver.value === "x20";
+    gnssIntegrityWarning.hidden = receiver.value !== "x20" || !enableOsnma.checked || !enableGalHas.checked;
+  }
+  function syncPositionSourceForm() {
+    positionSourceSelect.value = settings.positionSource;
+    positionSourceSelect.disabled = receiver.value !== "x20";
+    positionSourceSelect.title = receiver.value === "x20" ? "Choose which X20 navigation solution drives the live position display." : "The selected F9P provides the primary NAV solution only.";
+    positionSourceNote.hidden = receiver.value === "x20";
+  }
+  function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
   function resetTraceBuffers() { blockViews.forEach((view) => { view.averageHistory = []; view.peak = null; }); }
   function resetWaterfallHistory() {
     blockViews.forEach((view) => {
@@ -257,6 +286,7 @@
       }
     }
     for (const history of Object.values(signalHistory)) history instanceof Map ? history.clear() : history.length = 0;
+    hasCorrectionReports.NAV = null; hasCorrectionReports.NAV2 = null; renderHasDiagnostics();
     secEvents.length = 0; latestPga.length = 0; secSigFramesReceived = 0; secSigRawFramesReceived = 0;
     osnmaFrames.clear(); osnmaE1bFrameCount = 0; osnmaGalileoTime = null; latestOsnmaStatus = null; latestOsnmaTimeCheck = null; osnmaSatelliteResults.clear(); Object.keys(retainedOsnmaCodes).forEach((key) => { retainedOsnmaCodes[key] = null; }); osnmaTrustStatus.textContent = "Not loaded"; osnmaAuthStatus.textContent = "Not verified"; renderOsnma();
     signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 }; Object.assign(receiverThreat, { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null });
@@ -268,7 +298,7 @@
     drawSignals();
     const { width: trackWidth, height: trackHeight } = sizeCanvas(positionTrack); const trackContext = positionTrack.getContext("2d"); trackContext.fillStyle = "#090c12"; trackContext.fillRect(0, 0, trackWidth, trackHeight);
     fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
-    latestPosition.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">location_on</span>--'; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--'; speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--'; headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
+    latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --"; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--'; speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--'; headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
   }
 
   function createBlock(index) {
@@ -769,6 +799,39 @@
     drawScaleBar(context, width, height, padding, scale);
   }
 
+  function positionSourceForReceiver(receiverName, configuredSource) {
+    return receiverName === "x20" && configuredSource === "NAV2" ? "NAV2" : "NAV";
+  }
+
+  function resetPositionSourceDisplay() {
+    const source = positionSourceForReceiver(receiver.value, settings.positionSource);
+    positionFixes = []; positionView = null; positionDrag = null; latestReceiverUtc = null;
+    fixStatus.className = "status-item status-no-data"; fixStatus.textContent = `Fix: waiting for ${source}`;
+    gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
+    latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --";
+    altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--';
+    speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--';
+    headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
+    positionEmpty.hidden = false;
+    positionEmpty.textContent = `Waiting for ${source} position data.`;
+    positionInfo.textContent = `Position source: ${source}; waiting for position data.`;
+    positionRecenter.disabled = true; positionZoomIn.disabled = true; positionZoomOut.disabled = true;
+    const { width, height } = sizeCanvas(positionTrack);
+    const context = positionTrack.getContext("2d");
+    context.fillStyle = "#090c12"; context.fillRect(0, 0, width, height);
+    if (positionMap) {
+      if (mapTrack) mapTrack.clearLayers();
+      mapTrackSegments = [];
+      if (mapMarker) positionMap.removeLayer(mapMarker);
+      mapMarker = null;
+    }
+    if (mapLibreMap?.isStyleLoaded()) {
+      mapLibreMap.getSource("track")?.setData(vectorTrackData());
+      mapLibreMap.getSource("track-vertices")?.setData(vectorTrackVertices());
+      mapLibreMap.getSource("latest-fix")?.setData(latestFixData());
+    }
+  }
+
   function positionGridInterval(pixelsPerMetre, dpr = window.devicePixelRatio || 1) {
     const targetMetres = 80 * dpr / pixelsPerMetre;
     const magnitude = 10 ** Math.floor(Math.log10(targetMetres));
@@ -981,7 +1044,7 @@
     mapLibreMap.panTo([fix.longitude, fix.latitude], { animate: false });
   }
 
-  function parseNavPvt(payload) {
+  function parseNavPvt(payload, positionSource = "NAV") {
     if (payload.length < 92) return;
     const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
     const longitude = data.getInt32(24, true) / 1e7;
@@ -993,22 +1056,25 @@
     const fixType = payload[20]; const satellites = payload[23];
     const year = data.getUint16(4, true); const month = payload[6]; const day = payload[7]; const hour = payload[8]; const minute = payload[9]; const second = payload[10];
     const valid = payload[11]; const nano = data.getInt32(16, true); const receivedAt = Date.now();
-    latestPvtClock = { utcMs: Date.UTC(year, month - 1, day, hour, minute, second) + nano / 1e6, nano, tAccNs: data.getUint32(12, true), receivedAt, validDate: Boolean(valid & 0x01), validTime: Boolean(valid & 0x02), fullyResolved: Boolean(valid & 0x04), confirmedDate: Boolean(valid & 0x10), confirmedTime: Boolean(valid & 0x20) };
-    refreshOsnmaClock(receivedAt);
+    if (positionSource === "NAV") {
+      latestPvtClock = { utcMs: Date.UTC(year, month - 1, day, hour, minute, second) + nano / 1e6, nano, tAccNs: data.getUint32(12, true), receivedAt, validDate: Boolean(valid & 0x01), validTime: Boolean(valid & 0x02), fullyResolved: Boolean(valid & 0x04), confirmedDate: Boolean(valid & 0x10), confirmedTime: Boolean(valid & 0x20) };
+      refreshOsnmaClock(receivedAt);
+    }
+    if (positionSource !== positionSourceForReceiver(receiver.value, settings.positionSource)) return;
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
     const time = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
     const positionValid = Boolean(payload[21] & 0x01) && [2, 3, 4].includes(fixType);
-    updateReceiverStatus({ latitude, longitude, fixType, satellites, time, year, month, day, hour, minute, second, nano, altitudeMetres, groundSpeedMetresPerSecond, headingDegrees, valid, positionValid });
+    updateReceiverStatus({ latitude, longitude, fixType, satellites, time, year, month, day, hour, minute, second, nano, altitudeMetres, groundSpeedMetresPerSecond, headingDegrees, valid, positionValid, positionSource });
     if (!positionValid) return;
     const utm = latLonToUtm33(latitude, longitude);
     const threatLevel = Math.max(receiverThreat.monRfJam, receiverThreat.navSpoof, receiverThreat.secJam, receiverThreat.secSpoof);
     const threatColor = threatLevel >= 3 ? "#ff4444" : threatLevel >= 2 ? "#ffb347" : "#72c7e7";
-    const fix = { latitude, longitude, fixType, satellites, time, threatLevel, threatColor, ...utm };
+    const fix = { latitude, longitude, fixType, satellites, time, positionSource, threatLevel, threatColor, ...utm };
     const droppedOldestFix = positionFixes.length === 3600;
     positionFixes.push(fix); if (positionFixes.length > 3600) positionFixes.shift();
     positionRecenter.disabled = false; positionZoomIn.disabled = false; positionZoomOut.disabled = false;
     positionEmpty.hidden = true;
-    positionInfo.innerHTML = `<strong>Latitude:</strong> ${latitude.toFixed(6)}&deg; &nbsp; <strong>Longitude:</strong> ${longitude.toFixed(6)}&deg; &nbsp; <strong>Fix:</strong> ${fixNames[fixType] || `Fix ${fixType}`} &nbsp; <strong>SVs:</strong> ${satellites} &nbsp; <strong>Time:</strong> ${time} &nbsp; <a href="https://www.google.com/maps?q=${latitude.toFixed(6)},${longitude.toFixed(6)}" target="_blank">Open in Maps</a>`;
+    positionInfo.innerHTML = `<strong>Source:</strong> ${positionSource} &nbsp; <strong>Latitude:</strong> ${latitude.toFixed(6)}&deg; &nbsp; <strong>Longitude:</strong> ${longitude.toFixed(6)}&deg; &nbsp; <strong>Fix:</strong> ${fixNames[fixType] || `Fix ${fixType}`} &nbsp; <strong>SVs:</strong> ${satellites} &nbsp; <strong>Time:</strong> ${time} &nbsp; <a href="https://www.google.com/maps?q=${latitude.toFixed(6)},${longitude.toFixed(6)}" target="_blank">Open in Maps</a>`;
     if (!replayRebuilding && !positionPanel.hidden) { drawPositionTrack(); updatePositionMap(fix, droppedOldestFix); }
   }
 
@@ -1025,7 +1091,7 @@
     const fixName = ["No fix", "Dead reckoning", "2D fix", "3D fix", "GNSS + DR", "Time only"][fix.fixType] || `Fix ${fix.fixType}`;
     const indicator = fix.fixType >= 3 ? "🟢" : fix.fixType === 2 ? "🟡" : "🔴";
     fixStatus.className = `status-item ${fix.fixType >= 3 ? "status-fix-good" : fix.fixType === 2 ? "status-fix-warning" : "status-fix-bad"}`;
-    fixStatus.textContent = `${indicator} ${fixName} | ${fix.satellites} SV`;
+    fixStatus.textContent = `${indicator} ${fixName} | ${fix.positionSource} | ${fix.satellites} SV`;
     const utcValid = (fix.valid & 0x03) === 0x03;
     gpsTime.textContent = `GPS UTC: ${utcValid ? `${fix.time} UTC` : "unavailable"}`;
     if (utcValid) {
@@ -1037,11 +1103,11 @@
       clockOffset.textContent = `${appClockOffsetMs ? "App" : "NTP/local"} clock offset: ${sign}${(Math.abs(offsetMilliseconds) / 1000).toFixed(3)} s`;
     } else { latestReceiverUtc = null; clockOffset.textContent = "NTP/local clock offset: unavailable"; }
     if (!fix.positionValid) {
-      latestPosition.textContent = "Position: no fix"; altitudeStatus.textContent = "Altitude: --"; speedStatus.textContent = "Speed: --"; headingStatus.textContent = "Heading: --";
+      latitudeStatus.textContent = "Lat: no fix"; longitudeStatus.textContent = "Lon: no fix"; altitudeStatus.textContent = "Altitude: --"; speedStatus.textContent = "Speed: --"; headingStatus.textContent = "Heading: --";
       return;
     }
     const latitude = fix.latitude.toFixed(6); const longitude = fix.longitude.toFixed(6);
-    latestPosition.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">location_on</span><a href="https://www.google.com/maps?q=${latitude},${longitude}" target="_blank" rel="noopener">${latitude}, ${longitude}</a>`;
+    latitudeStatus.textContent = `Lat: ${latitude}°`; longitudeStatus.textContent = `Lon: ${longitude}°`;
     altitudeStatus.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">terrain</span>${fix.altitudeMetres.toFixed(1)} m`;
     speedStatus.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">speed</span>${(fix.groundSpeedMetresPerSecond * 3.6).toFixed(1)} km/h`;
     headingStatus.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">navigation</span>${((fix.headingDegrees % 360) + 360).toFixed(1)}°`;
@@ -1088,6 +1154,10 @@
       osnmaClockAuth.textContent = statusFresh ? "Clock time not authenticated by OSNMA" : "OSNMA verification unavailable";
       osnmaClockAuth.dataset.state = "waiting";
     }
+    if (!settings.enableOsnma) {
+      osnmaClockAuth.textContent = "OSNMA disabled in settings";
+      osnmaClockAuth.dataset.state = "off";
+    }
     [osnmaClockPvt, osnmaClockTimeUtc, osnmaClockAuth].forEach((element) => {
       if (element.parentElement?.classList?.contains("gnss-threat-indicator")) element.parentElement.dataset.state = element.dataset.state || "waiting";
     });
@@ -1095,10 +1165,50 @@
 
   function gnssColor(gnssId) { return ["#ffb347", "#00ffff", "#66ff88", "#ff7262", "#ffffff", "#ffff66", "#f27bfd", "#88aaff"][gnssId] || "#aaaaaa"; }
 
-  function parseNavSat(payload) {
+  function parseHasCorrectionCounts(payload) {
+    if (payload.length < 8) return null;
+    const count = Math.min(payload[5], Math.floor((payload.length - 8) / 12));
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const counts = { gps: 0, galileo: 0 };
+    for (let index = 0; index < count; index++) {
+      const offset = 8 + index * 12;
+      if ((data.getUint32(offset + 8, true) & 0x02000000) === 0) continue;
+      if (payload[offset] === 0) counts.gps += 1;
+      if (payload[offset] === 2) counts.galileo += 1;
+    }
+    return counts;
+  }
+
+  function renderHasDiagnostics(now = Date.now()) {
+    const supported = receiver.value === "x20";
+    const bothEnabled = supported && settings.enableOsnma && settings.enableGalHas;
+    hasNav2Engine.hidden = !supported;
+    hasCoexistWarning.hidden = !bothEnabled;
+    if (!supported) {
+      hasDiagnosticsStatus.textContent = "HAS is not supported by the selected F9P";
+      hasDiagnosticsStatus.dataset.state = "warning";
+      hasNavCount.textContent = "Not supported";
+      hasNav2Count.textContent = "Not supported";
+      return;
+    }
+    hasDiagnosticsStatus.textContent = bothEnabled ? "Both selected; unsupported combination" : settings.enableGalHas ? "HAS enabled in settings" : "HAS disabled in settings";
+    hasDiagnosticsStatus.dataset.state = bothEnabled ? "warning" : settings.enableGalHas ? "waiting" : "off";
+    const format = (report, name) => {
+      if (!report) return `Waiting for ${name}-SAT`;
+      const age = Math.max(0, now - report.receivedAt);
+      return `GPS ${report.gps} · Galileo ${report.galileo}${age > 5000 ? ` · stale ${(age / 1000).toFixed(1)} s` : ""}`;
+    };
+    hasNavCount.textContent = format(hasCorrectionReports.NAV, "NAV");
+    hasNav2Count.textContent = format(hasCorrectionReports.NAV2, "NAV2");
+  }
+
+  function parseNavSat(payload, solution = "NAV") {
     if (payload.length < 8) return;
     const count = Math.min(payload[5], Math.floor((payload.length - 8) / 12)); const epoch = ++signalEpoch.cno;
+    const hasCounts = parseHasCorrectionCounts(payload);
+    if (hasCounts) hasCorrectionReports[solution] = { ...hasCounts, receivedAt: Date.now() };
     for (let index = 0; index < count; index++) { const offset = 8 + index * 12; const gnssId = payload[offset]; const svId = payload[offset + 1]; appendSeries(signalHistory.cno, `${gnssId}:${svId}`, epoch, payload[offset + 2], gnssColor(gnssId)); }
+    renderHasDiagnostics();
     signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
   }
 
@@ -1144,6 +1254,7 @@
   }
 
   function renderOsnma() {
+    osnmaDisabledBanner.hidden = settings.enableOsnma;
     osnmaInputStatus.textContent = osnmaE1bFrameCount ? `Receiving Galileo E1-B (${osnmaFrames.size} satellites)` : "Waiting for Galileo E1-B data";
     osnmaInputStatus.dataset.state = osnmaE1bFrameCount ? "good" : "waiting";
     osnmaTimeStatus.textContent = osnmaGalileoTime || "Waiting for NAV-TIMEGAL";
@@ -1199,6 +1310,11 @@
       if (element.parentElement?.classList?.contains("gnss-threat-indicator")) element.parentElement.dataset.state = element.dataset.state || "waiting";
     });
     refreshOsnmaIndicators();
+    if (!settings.enableOsnma) {
+      osnmaInputStatus.textContent = "OSNMA disabled in settings"; osnmaInputStatus.dataset.state = "off";
+      osnmaTimeStatus.textContent = "OSNMA disabled in settings"; osnmaTimeStatus.dataset.state = "off";
+      osnmaAuthStatus.textContent = "OSNMA disabled in settings"; osnmaAuthStatus.dataset.state = "off";
+    }
     if (!osnmaFrames.size) {
       osnmaFrameRows.innerHTML = '<tr><td colspan="4">No Galileo E1-B frames received.</td></tr>';
       return;
@@ -1225,7 +1341,7 @@
   function canCorrectLocalClock(now = Date.now()) {
     const status = latestOsnmaStatus;
     const check = latestOsnmaTimeCheck;
-    return Boolean(port && writer && reading && !replayData && !trustedClockUpdatePending && status && check && trustedClockSample
+    return Boolean(settings.enableOsnma && port && writer && reading && !replayData && !trustedClockUpdatePending && status && check && trustedClockSample
       && status.connectionId === liveConnectionId && trustedClockSample.connectionId === liveConnectionId
       && check.trustedClockSample === trustedClockSample && check.status === 3 && check.authenticated && Number.isFinite(check.differenceMs)
       && now >= check.receivedAt
@@ -1238,11 +1354,15 @@
   }
   function refreshLocalClock(now = Date.now()) {
     osnmaUpdateLocalTime.disabled = !canCorrectLocalClock(now);
-    osnmaSendTrustedTime.disabled = !writer || !reading || replayData || !osnmaClockSettings.useComputerClock || trustedClockUpdatePending || configureButton.disabled;
+    osnmaSendTrustedTime.disabled = !settings.enableOsnma || !writer || !reading || replayData || !osnmaClockSettings.useComputerClock || trustedClockUpdatePending || configureButton.disabled;
     const correction = `${appClockOffsetMs >= 0 ? "+" : "-"}${(Math.abs(appClockOffsetMs) / 1000).toFixed(3)} s`;
     osnmaLocalTime.textContent = `Local UTC: ${new Date(now + appClockOffsetMs).toISOString().replace("T", " ").replace("Z", " UTC")}; correction ${correction}`;
   }
   async function sendTrustedTimeNow() {
+    if (!settings.enableOsnma) {
+      osnmaTrustedTimeStatus.textContent = "Enable OSNMA in Settings before sending trusted time.";
+      return;
+    }
     if (!osnmaClockSettings.useComputerClock) {
       osnmaTrustedTimeStatus.textContent = "Enable the trusted computer UTC requirement before sending.";
       return;
@@ -1291,6 +1411,16 @@
     return retainedState === "good" && (now < result.receivedAt || now - result.receivedAt > expectedIntervalMs) ? "waiting" : retainedState;
   }
   function refreshOsnmaIndicators(now = Date.now()) {
+    if (!settings.enableOsnma) {
+      osnmaLastUpdate.textContent = "OSNMA disabled"; osnmaLastUpdate.dataset.state = "off";
+      osnmaReceiverStatus.textContent = "Disabled by settings"; osnmaReceiverStatus.dataset.state = "off";
+      [osnmaServiceState, osnmaTimeSyncState, osnmaTimeDelta, osnmaHeaderAuth, osnmaDsmAuth, osnmaTeslaAuth, osnmaTimingAuth, osnmaAuthStatus].forEach((element) => {
+        element.dataset.state = "off";
+        if (element.parentElement?.classList?.contains("gnss-threat-indicator")) element.parentElement.dataset.state = "off";
+      });
+      refreshLocalClock(now);
+      return;
+    }
     const status = latestOsnmaStatus;
     const age = status ? Math.max(0, now - status.receivedAt) : null;
     osnmaLastUpdate.textContent = age === null ? "Last update: --" : `Last update: ${Math.floor(age / 1000)} s ago`;
@@ -1558,13 +1688,18 @@
   }
 
   function handleUbx(messageClass, messageId, payload) {
-    if (pendingInterfacePoll && messageClass === 0x0a && messageId === 0x36) pendingInterfacePoll(parseMonCommsInterface(payload));
+    if (messageClass === 0x0a && messageId === 0x36) {
+      const interfaceName = parseMonCommsInterface(payload);
+      if (pendingInterfacePoll) pendingInterfacePoll(interfaceName);
+      else if (interfaceName) receiverInterface.textContent = `Interface: ${interfaceName}`;
+    }
+    if (messageClass === 0x0a && messageId === 0x04) parseMonVer(payload);
     if (messageClass === 0x05 && (messageId === 0x01 || messageId === 0x00)) receiveConfigAck(messageId, payload);
     if (messageClass === 0x13 && messageId === 0x60) receiveMgaAck(payload);
     if (messageClass === 0x0a && messageId === 0x31) parseMonSpan(payload);
     if (messageClass === 0x01 && messageId === 0x07) parseNavPvt(payload);
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x21) parseNavTimeUtc(payload);
-    if (messageClass === 0x01 && messageId === 0x35) parseNavSat(payload);
+    if (messageClass === 0x01 && messageId === 0x35) parseNavSat(payload, "NAV");
     if (messageClass === 0x01 && messageId === 0x43) parseNavSig(payload);
     if (messageClass === 0x02 && messageId === 0x15) parseRawx(payload);
     if (messageClass === 0x0a && messageId === 0x38) parseMonRf(payload);
@@ -1572,8 +1707,8 @@
     if (messageClass === 0x27 && messageId === 0x09) parseSecSig(payload);
     if (messageClass === 0x27 && messageId === 0x10) parseSecSigLog(payload);
     if (messageClass === 0x27 && messageId === 0x0a) parseSecOsnma(payload);
-    if (messageClass === 0x29 && messageId === 0x35) parseNavSat(payload); // NAV2-SAT on newer X20 firmware
-    if (messageClass === 0x29 && messageId === 0x07) parseNavPvt(payload); // NAV2-PVT on newer X20 firmware
+    if (messageClass === 0x29 && messageId === 0x35) parseNavSat(payload, "NAV2"); // NAV2-SAT on newer X20 firmware
+    if (messageClass === 0x29 && messageId === 0x07) parseNavPvt(payload, "NAV2"); // NAV2-PVT on newer X20 firmware
     if (messageClass === 0x29 && messageId === 0x43) parseNavSig(payload); // NAV2-SIG on newer X20 firmware
     if (messageClass === 0x02 && messageId === 0x13) parseRxmSfrbx(payload);
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x25) parseNavTimeGal(payload);
@@ -1582,23 +1717,72 @@
   function parseMonCommsInterface(payload) {
     const headerBytes = 8;
     const minimumPortBytes = 16;
-    if (payload.length < headerBytes || payload[0] !== 0) return null;
+    const setDetails = (message) => { receiverInterface.title = message; return null; };
+    if (payload.length < headerBytes) return setDetails(`MON-COMMS response too short: ${payload.length} bytes`);
+    if (payload[0] !== 0) return setDetails(`Unsupported MON-COMMS version ${payload[0]}; payload ${payload.length} bytes`);
     const portCount = payload[1];
-    if (!portCount || (payload.length - headerBytes) % portCount !== 0) return null;
+    if (!portCount) return setDetails("MON-COMMS reports zero ports");
+    if ((payload.length - headerBytes) % portCount !== 0) return setDetails(`Malformed MON-COMMS payload: ${portCount} ports, ${payload.length} bytes`);
     const portBytes = (payload.length - headerBytes) / portCount;
-    if (portBytes < minimumPortBytes) return null;
+    if (portBytes < minimumPortBytes) return setDetails(`MON-COMMS port record too short: ${portBytes} bytes`);
     const portNames = new Map([[0x0000, "I2C"], [0x0100, "UART1"], [0x0200, "UART2"], [0x0300, "USB"], [0x0400, "SPI"]]);
     const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
     let activePort = null;
+    const portDetails = [];
     for (let index = 0; index < portCount; index++) {
       const offset = headerBytes + index * portBytes;
       const portId = data.getUint16(offset, true);
       const txBytes = data.getUint32(offset + 4, true);
       const rxBytes = data.getUint32(offset + 12, true);
       const name = portNames.get(portId);
+      portDetails.push(`${name || `port 0x${portId.toString(16).padStart(4, "0")}`}: TX ${txBytes}, RX ${rxBytes}`);
       if (name && txBytes > 0 && rxBytes > 0 && (!activePort || txBytes + rxBytes > activePort.activity)) activePort = { name, activity: txBytes + rxBytes };
     }
+    receiverInterface.title = `MON-COMMS v${payload[0]}, ${portCount} ports; ${portDetails.join("; ")}`;
     return activePort?.name || null;
+  }
+
+  function parseMonVer(payload) {
+    if (payload.length < 40) return null;
+    const readString = (start, length) => new TextDecoder().decode(payload.subarray(start, start + length)).split("\0", 1)[0].trim();
+    const software = readString(0, 30);
+    const hardware = readString(30, 10);
+    const extensions = [];
+    for (let offset = 40; offset + 30 <= payload.length; offset += 30) {
+      const extension = readString(offset, 30);
+      if (extension) extensions.push(extension);
+    }
+    const extensionValue = (name) => extensions.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) || "";
+    const firmware = extensionValue("FWVER") || software || "unknown";
+    const model = extensionValue("MOD");
+    const protocol = extensionValue("PROTVER");
+    receiverFirmware.textContent = `FW: ${firmware}${model ? ` (${model})` : ""}`;
+    receiverFirmware.title = [`Hardware: ${hardware || "unknown"}`, `Protocol: ${protocol || "unknown"}`, ...extensions].join("; ");
+    if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout);
+    receiverFirmwareTimeout = null;
+    return { software, hardware, firmware, model, protocol, extensions };
+  }
+
+  function pollReceiverFirmware() {
+    if (!writer) return;
+    if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout);
+    const connectionId = liveConnectionId;
+    receiverFirmware.textContent = "FW: querying...";
+    receiverFirmware.title = "Waiting for UBX-MON-VER";
+    receiverFirmwareTimeout = setTimeout(() => {
+      receiverFirmwareTimeout = null;
+      if (connectionId === liveConnectionId && port && receiverFirmware.textContent === "FW: querying...") {
+        receiverFirmware.textContent = "FW: unavailable";
+        receiverFirmware.title = "No UBX-MON-VER response received";
+      }
+    }, 2500);
+    writer.write(ubxFrame(0x0a, 0x04, new Uint8Array(0))).catch(() => {
+      if (connectionId !== liveConnectionId) return;
+      if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout);
+      receiverFirmwareTimeout = null;
+      receiverFirmware.textContent = "FW: query failed";
+      receiverFirmware.title = "Could not send UBX-MON-VER poll";
+    });
   }
 
   function parseMonSpan(payload) {
@@ -1763,18 +1947,20 @@
   }
   async function detectReceiverInterface() {
     receiverInterface.textContent = "Interface: detecting...";
+    receiverInterface.title = "Polling UBX-MON-COMMS for active RX/TX counters";
     const interfaceName = await new Promise((resolve) => {
       const timeout = setTimeout(() => pendingInterfacePoll?.(null), 1500);
       pendingInterfacePoll = (name) => { clearTimeout(timeout); pendingInterfacePoll = null; resolve(name); };
       writer.write(ubxFrame(0x0a, 0x36, new Uint8Array(0))).catch(() => pendingInterfacePoll?.(null));
     });
     receiverInterface.textContent = interfaceName ? `Interface: ${interfaceName}` : "Interface: unknown (MON-COMMS reported no active RX/TX port)";
+    if (!interfaceName && receiverInterface.title.startsWith("Polling")) receiverInterface.title = "No MON-COMMS response received before timeout";
+    return interfaceName;
   }
 
   function receiverInterfaceRequests(requests, allInterfaces) {
-    const interfaces = allInterfaces
-      ? [["I2C", -1, 0x10720000], ["UART1", 0, 0x10740000], ["UART2", 1, 0x10760000], ["USB", 2, 0x10780000], ["SPI", 3, 0x107a0000]]
-      : [["UART1", 0, 0x10740000]];
+    const allReceiverInterfaces = [["I2C", -1, 0x10720000], ["UART1", 0, 0x10740000], ["UART2", 1, 0x10760000], ["USB", 2, 0x10780000], ["SPI", 3, 0x107a0000]];
+    const interfaces = allInterfaces ? allReceiverInterfaces : [allReceiverInterfaces[1]];
     const protocolRequests = interfaces.flatMap(([name, offset, protocolKey]) => [
       [`${name} UBX output on`, protocolKey + 1, 1, 1],
       [`${name} NMEA output off`, protocolKey + 2, 0, 1],
@@ -1784,6 +1970,12 @@
       if (!name.endsWith(" UART1")) return [[name, key, value, valueBytes]];
       return interfaces.map(([interfaceName, offset]) => [name.replace(/UART1$/, interfaceName), key + offset, value, valueBytes]);
     }));
+  }
+
+  function gnssFeatureConfigurationRequests(receiverName, enableOsnmaValue, enableGalHasValue) {
+    const requests = [["Galileo OSNMA", 0x10350005, enableOsnmaValue ? 1 : 0, 1]];
+    if (receiverName === "x20") requests.push(["Galileo HAS", 0x100d0002, enableGalHasValue ? 1 : 0, 1]);
+    return requests;
   }
 
   async function configureMonSpan() {
@@ -1800,7 +1992,7 @@
         ["NAV-SAT UART1", 0x20910016, 1, 1],
         ["NAV-STATUS UART1", 0x2091001b, 1, 1],
         ["Assistance message ACKs", 0x10110025, 1, 1],
-        ["Galileo OSNMA enabled", 0x10350005, 1, 1],
+        ...gnssFeatureConfigurationRequests(receiver.value, settings.enableOsnma, settings.enableGalHas),
         [osnmaClockSettings.useComputerClock ? "Require trusted computer time" : "OSNMA without trusted computer time", 0x10350009, osnmaClockSettings.useComputerClock ? 1 : 0, 1],
         ["SEC-OSNMA UART1", 0x209106cb, 1, 1],
         ["RXM-RAWX UART1", 0x209102a5, 1, 1],
@@ -2103,11 +2295,11 @@
       port = selectedPort; writer = port.writable.getWriter(); reading = true;
       resetLocalClock();
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
-      connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); await detectReceiverInterface(); await configureMonSpan(); setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
+      connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); pollReceiverFirmware(); await detectReceiverInterface(); await configureMonSpan(); setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
     } catch (error) { setStatus(`Connection failed: ${error.message}`); }
     finally { connectButton.disabled = false; }
   }
-  async function disconnect() { reading = false; resetLocalClock(); stopSecSigPolling(); if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
+  async function disconnect() { reading = false; resetLocalClock(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
 
   connectButton.addEventListener("click", () => port ? disconnect() : connect());
   recordButton.addEventListener("click", () => isRecording() ? stopRecording() : startRecording());
@@ -2135,14 +2327,20 @@
   playbackHead.addEventListener("pointerup", () => { playbackDrag = null; });
   playbackHead.addEventListener("pointercancel", () => { playbackDrag = null; });
   window.addEventListener("resize", clampPlaybackPosition);
-  receiver.addEventListener("change", () => { settings.lastReceiver = receiver.value; saveSettings(); syncReceiverBaud(); });
+  receiver.addEventListener("change", () => { settings.lastReceiver = receiver.value; saveSettings(); syncReceiverBaud(); updateGnssIntegritySettingsForm(); syncPositionSourceForm(); renderHasDiagnostics(); resetPositionSourceDisplay(); });
   baud.addEventListener("change", () => { if (baud.value !== "auto") { settings.baudByReceiver[receiver.value] = Number(baud.value); saveSettings(); } });
   receiver.value = settings.lastReceiver;
   syncReceiverBaud();
+  updateGnssIntegritySettingsForm();
+  syncPositionSourceForm();
+  renderHasDiagnostics();
+  resetPositionSourceDisplay();
+  renderOsnma();
   syncOsnmaClockForm();
   refreshOsnmaIndicators();
   refreshOsnmaClock();
   setInterval(refreshOsnmaIndicators, 1000);
+  setInterval(renderHasDiagnostics, 1000);
   setInterval(refreshOsnmaClock, 100);
   configureButton.addEventListener("click", configureMonSpan);
   osnmaTrustComputerClock.addEventListener("change", updateOsnmaClockSettings);
@@ -2182,19 +2380,24 @@
   });
   settingsButton.addEventListener("click", () => { syncSettingsForm(); settingsDialog.showModal(); });
   settingsClose.addEventListener("click", () => settingsDialog.close());
-  settingsReset.addEventListener("click", () => { Object.assign(settings, DEFAULT_SETTINGS); syncSettingsForm(); });
+  settingsReset.addEventListener("click", () => { const sourceChanged = settings.positionSource !== DEFAULT_SETTINGS.positionSource; Object.assign(settings, DEFAULT_SETTINGS); syncSettingsForm(); renderOsnma(); renderHasDiagnostics(); if (sourceChanged) resetPositionSourceDisplay(); });
+  enableOsnma.addEventListener("change", updateGnssIntegritySettingsForm);
+  enableGalHas.addEventListener("change", updateGnssIntegritySettingsForm);
   settingsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const nextBaud = Number(receiverBaud.value);
     const interfacesChanged = settings.configureAllInterfaces !== configureAllInterfaces.checked;
+    const gnssFeaturesChanged = settings.enableOsnma !== enableOsnma.checked || settings.enableGalHas !== enableGalHas.checked;
+    const nextPositionSource = receiver.value === "x20" ? positionSourceSelect.value : settings.positionSource;
+    const positionSourceChanged = nextPositionSource !== settings.positionSource;
     const currentBaud = settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value];
-    const nextSettings = { showAverage: showAverage.checked, averageFrames: Math.max(1, Math.min(120, Number(averageFrames.value) || DEFAULT_SETTINGS.averageFrames)), showPeak: showPeak.checked, peakDecay: Math.max(0, Math.min(30, Number(peakDecay.value) || 0)), darkMap: darkMap.checked, waterfallMinutes: Math.max(5, Math.min(30, Number(waterfallMinutes.value) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(waterfallMarkerMinutes.value) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), baudByReceiver: { ...settings.baudByReceiver } };
+    const nextSettings = { enableOsnma: enableOsnma.checked, enableGalHas: enableGalHas.checked, positionSource: nextPositionSource, showAverage: showAverage.checked, averageFrames: Math.max(1, Math.min(120, Number(averageFrames.value) || DEFAULT_SETTINGS.averageFrames)), showPeak: showPeak.checked, peakDecay: Math.max(0, Math.min(30, Number(peakDecay.value) || 0)), darkMap: darkMap.checked, waterfallMinutes: Math.max(5, Math.min(30, Number(waterfallMinutes.value) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(waterfallMarkerMinutes.value) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), baudByReceiver: { ...settings.baudByReceiver } };
     const markerIntervalChanged = nextSettings.waterfallMarkerMinutes !== settings.waterfallMarkerMinutes; const durationChanged = nextSettings.waterfallMinutes !== settings.waterfallMinutes; const blockCount = blockViews.length;
     nextSettings.configureAllInterfaces = configureAllInterfaces.checked;
     nextSettings.lastReceiver = receiver.value;
     const mapThemeChanged = nextSettings.darkMap !== settings.darkMap;
-    settings = nextSettings; resetTraceBuffers(); if (durationChanged && blockCount) buildBlocks(blockCount); else if (markerIntervalChanged) blockViews.forEach((view) => { view.timestampMarkers = []; view.lastMarkerSlot = null; }); if (mapThemeChanged) updateMapTiles(); saveSettings();
-    try { if (nextBaud !== currentBaud) await applyReceiverBaud(nextBaud); if (interfacesChanged && writer) await configureMonSpan(); settingsDialog.close(); }
+    settings = nextSettings; resetTraceBuffers(); if (durationChanged && blockCount) buildBlocks(blockCount); else if (markerIntervalChanged) blockViews.forEach((view) => { view.timestampMarkers = []; view.lastMarkerSlot = null; }); if (mapThemeChanged) updateMapTiles(); saveSettings(); renderOsnma(); renderHasDiagnostics(); refreshLocalClock(); if (positionSourceChanged) resetPositionSourceDisplay();
+    try { if (nextBaud !== currentBaud) await applyReceiverBaud(nextBaud); if ((interfacesChanged || gnssFeaturesChanged) && writer) await configureMonSpan(); settingsDialog.close(); }
     catch (error) { setStatus(`Baud change failed: ${error.message}`); }
   });
   navigator.serial?.addEventListener("disconnect", () => { if (port) disconnect(); });

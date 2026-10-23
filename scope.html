@@ -22,19 +22,25 @@
     <button id="settings" class="secondary" aria-haspopup="dialog">Settings</button>
   </header>
   <section id="receiver-status" aria-label="Receiver status">
-    <span id="receiver-interface" class="status-item" role="status">Interface: --</span>
-    <span id="fix-status" class="status-item status-no-data">Fix: no data</span>
-    <span id="gps-time" class="status-item">GPS UTC: --</span>
-    <span id="clock-offset" class="status-item">NTP/local clock offset: --</span>
-    <span id="latest-position" class="status-item status-metric" title="Position" aria-label="Position"><span class="material-symbols-outlined" aria-hidden="true">location_on</span>--</span>
-    <span id="altitude-status" class="status-item status-metric" title="Altitude above mean sea level" aria-label="Altitude above mean sea level"><span class="material-symbols-outlined" aria-hidden="true">terrain</span>--</span>
-    <span id="speed-status" class="status-item status-metric" title="Ground speed" aria-label="Ground speed"><span class="material-symbols-outlined" aria-hidden="true">speed</span>--</span>
-    <span id="heading-status" class="status-item status-metric" title="Heading of motion" aria-label="Heading of motion"><span class="material-symbols-outlined" aria-hidden="true">navigation</span>--</span>
-    <span id="status" class="status-message">Waiting for a port</span>
-    <span id="configuration-status" class="configuration-light config-pending" tabindex="0" aria-label="Configuration status">
-      <span class="configuration-light-lamp" aria-hidden="true"></span>
-      <span class="configuration-tooltip" role="tooltip">Configuration: not sent</span>
-    </span>
+    <div id="navigation-status-row" class="status-row" aria-label="Navigation status">
+      <span id="fix-status" class="status-item status-no-data">Fix: no data</span>
+      <span id="gps-time" class="status-item">GPS UTC: --</span>
+      <span id="latitude-status" class="status-item" title="Latitude">Lat: --</span>
+      <span id="longitude-status" class="status-item" title="Longitude">Lon: --</span>
+      <span id="altitude-status" class="status-item status-metric" title="Altitude above mean sea level" aria-label="Altitude above mean sea level"><span class="material-symbols-outlined" aria-hidden="true">terrain</span>--</span>
+      <span id="speed-status" class="status-item status-metric" title="Ground speed" aria-label="Ground speed"><span class="material-symbols-outlined" aria-hidden="true">speed</span>--</span>
+      <span id="heading-status" class="status-item status-metric" title="Heading of motion" aria-label="Heading of motion"><span class="material-symbols-outlined" aria-hidden="true">navigation</span>--</span>
+    </div>
+    <div id="receiver-status-row" class="status-row" aria-label="Receiver and monitoring status">
+      <span id="receiver-interface" class="status-item" role="status">Interface: --</span>
+      <span id="receiver-firmware" class="status-item" role="status" title="Receiver firmware and protocol version">FW: --</span>
+      <span id="clock-offset" class="status-item">NTP/local clock offset: --</span>
+      <span id="status" class="status-message">Waiting for a port</span>
+      <span id="configuration-status" class="configuration-light config-pending" tabindex="0" aria-label="Configuration status">
+        <span class="configuration-light-lamp" aria-hidden="true"></span>
+        <span class="configuration-tooltip" role="tooltip">Configuration: not sent</span>
+      </span>
+    </div>
   </section>
   <main>
     <div class="tabs" role="tablist" aria-label="UBX Scope views">
@@ -63,6 +69,15 @@
         <div class="gnss-threat-indicator" data-state="waiting"><span>SEC-SIG jamming</span><strong>Waiting</strong></div>
         <div class="gnss-threat-indicator" data-state="waiting"><span>SEC-SIG spoofing</span><strong>Waiting</strong></div>
       </section>
+      <section id="has-diagnostics" class="has-diagnostics" aria-labelledby="has-diagnostics-heading">
+        <header><h2 id="has-diagnostics-heading">HAS corrections in use <span>NAV-SAT</span></h2><span id="has-diagnostics-status" data-state="waiting">Waiting for receiver data</span></header>
+        <p id="has-coexist-warning" role="alert" hidden>HAS and OSNMA are both selected. u-blox HPG 2.10/2.11 release notes state they cannot be enabled together; this unsupported combination may affect OSNMA authentication.</p>
+        <div class="has-engine-grid">
+          <div class="has-engine"><span>NAV</span><strong id="has-nav-count">Waiting for NAV-SAT</strong></div>
+          <div class="has-engine" id="has-nav2-engine"><span>NAV2</span><strong id="has-nav2-count">Waiting for NAV2-SAT</strong></div>
+        </div>
+        <p class="has-diagnostics-note">Counts reflect receiver-reported per-satellite HAS correction use for GPS and Galileo; they are not an independent signal-authenticity check.</p>
+      </section>
       <fieldset id="constellation-filter">
         <legend>Constellations</legend>
         <label class="constellation gps"><input type="checkbox" value="0" checked> GPS</label>
@@ -88,6 +103,7 @@
       <section id="sec-event-log" class="security-summary"><strong>SEC-SIGLOG:</strong> no events.</section>
     </section>
     <section id="osnma-panel" role="tabpanel" aria-labelledby="osnma-tab" hidden>
+      <p id="osnma-disabled-banner" class="osnma-disabled-banner" role="status" hidden>OSNMA is switched off in Settings. Sending configuration will disable receiver-side OSNMA processing.</p>
       <div class="osnma-actions">
         <button id="osnma-provision" type="button" class="secondary"><span class="material-symbols-outlined" aria-hidden="true">upload</span>Provision receiver</button>
         <input id="osnma-folder-picker" type="file" webkitdirectory multiple accept=".xml,.crt,.crl,.p256" hidden aria-label="Select the OSNMA trust-material folder">
@@ -182,8 +198,20 @@
   </dialog>
   <dialog id="settings-dialog">
     <form id="settings-form">
-      <div class="settings-head"><h2>Spectrum Settings</h2><button type="button" id="settings-close" class="secondary" aria-label="Close settings">Close</button></div>
+      <div class="settings-head"><h2>Settings</h2><button type="button" id="settings-close" class="secondary" aria-label="Close settings">Close</button></div>
       <div class="settings-body">
+        <fieldset class="integrity-settings">
+          <legend>GNSS integrity features</legend>
+          <label class="toggle"><input id="enable-osnma" type="checkbox" checked> Enable Galileo OSNMA</label>
+          <label class="toggle"><input id="enable-has" type="checkbox"> Enable Galileo HAS</label>
+          <p id="has-support-note" role="status" hidden>HAS is not supported by the selected F9P receiver; Galileo E6 reception is required.</p>
+          <p id="gnss-integrity-warning" role="status" aria-live="polite" hidden>u-blox HPG 2.10/2.11 release notes state Galileo HAS and OSNMA cannot be enabled together. Selecting both is unsupported and may affect OSNMA authentication.</p>
+        </fieldset>
+        <fieldset class="position-source-settings">
+          <legend>Position display</legend>
+          <label class="setting">Position source<select id="position-source"><option value="NAV">Primary NAV</option><option value="NAV2">Secondary NAV2</option></select></label>
+          <p id="position-source-note" role="status" hidden>The F9P uses NAV only. Your saved X20 source preference is retained.</p>
+        </fieldset>
         <label class="toggle"><input id="show-average" type="checkbox"> Show average trace</label>
         <label class="setting">Average window (frames)<input id="average-frames" type="number" min="1" max="120" step="1"></label>
         <label class="toggle"><input id="show-peak" type="checkbox"> Show peak trace</label>

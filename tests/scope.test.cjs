@@ -32,6 +32,58 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+test("legacy settings preserve OSNMA and default position source to NAV", () => {
+  const defaults = { configureAllInterfaces: false, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: false, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
+  const context = loadFunctions(["loadSettings"], {
+    DEFAULT_SETTINGS: defaults,
+    SETTINGS_KEY: "settings",
+    localStorage: { getItem: () => JSON.stringify({ lastReceiver: "x20", baudByReceiver: { x20: 38400 } }) },
+  });
+  const settings = context.loadSettings();
+  assert.equal(settings.enableOsnma, true);
+  assert.equal(settings.enableGalHas, false);
+  assert.equal(settings.positionSource, "NAV");
+  assert.equal(settings.lastReceiver, "x20");
+});
+
+test("position-source setting keeps NAV2 preference for X20 but falls back to NAV on F9P", () => {
+  const select = { value: "", disabled: false, title: "" };
+  const note = { hidden: true };
+  const context = loadFunctions(["syncPositionSourceForm", "positionSourceForReceiver"], {
+    settings: { positionSource: "NAV2" }, receiver: { value: "f9p" }, positionSourceSelect: select, positionSourceNote: note,
+  });
+  context.syncPositionSourceForm();
+  assert.equal(select.value, "NAV2");
+  assert.equal(select.disabled, true);
+  assert.equal(note.hidden, false);
+  assert.equal(context.positionSourceForReceiver("f9p", select.value), "NAV");
+  context.receiver.value = "x20";
+  context.syncPositionSourceForm();
+  assert.equal(select.disabled, false);
+  assert.equal(note.hidden, true);
+  assert.equal(context.positionSourceForReceiver("x20", select.value), "NAV2");
+});
+
+test("HAS settings disable on F9P and warn for the unsupported X20 combination", () => {
+  const label = { title: "" };
+  const context = loadFunctions(["updateGnssIntegritySettingsForm"], {
+    receiver: { value: "f9p" },
+    enableOsnma: { checked: true },
+    enableGalHas: { checked: true, disabled: false, title: "", closest: () => label },
+    hasSupportNote: { hidden: true },
+    gnssIntegrityWarning: { hidden: true },
+  });
+  context.updateGnssIntegritySettingsForm();
+  assert.equal(context.enableGalHas.disabled, true);
+  assert.equal(context.hasSupportNote.hidden, false);
+  assert.equal(context.gnssIntegrityWarning.hidden, true);
+  context.receiver.value = "x20";
+  context.updateGnssIntegritySettingsForm();
+  assert.equal(context.enableGalHas.disabled, false);
+  assert.equal(context.hasSupportNote.hidden, true);
+  assert.equal(context.gnssIntegrityWarning.hidden, false);
+});
+
 test("canvas PNG export downloads a timestamped PNG and revokes its object URL", () => {
   let exportedBlob;
   let exportType;
@@ -175,7 +227,7 @@ test("GNSS threat summary distinguishes status severity and disabled detection",
 });
 
 test("MON-COMMS selects a recognized port with both RX and TX activity", () => {
-  const context = loadFunctions(["parseMonCommsInterface"], {});
+  const context = loadFunctions(["parseMonCommsInterface"], { receiverInterface: { title: "" } });
   const payload = new Uint8Array(8 + 2 * 40);
   payload[0] = 0; payload[1] = 2;
   const data = new DataView(payload.buffer);
@@ -186,6 +238,7 @@ test("MON-COMMS selects a recognized port with both RX and TX activity", () => {
   data.setUint32(52, 500, true);
   data.setUint32(60, 700, true);
   assert.equal(context.parseMonCommsInterface(payload), "UART1");
+  assert.match(context.receiverInterface.title, /USB: TX 10000, RX 0; UART1: TX 500, RX 700/);
   assert.equal(context.parseMonCommsInterface(new Uint8Array(8)), null);
   const truncated = new Uint8Array(8 + 2 * 15); truncated[1] = 2;
   assert.equal(context.parseMonCommsInterface(truncated), null);
@@ -201,6 +254,81 @@ test("UBX dispatcher routes MON-COMMS responses to the pending interface poll", 
   });
   context.handleUbx(0x0a, 0x36, new Uint8Array(0));
   assert.deepEqual(resolved, ["USB"]);
+});
+
+test("MON-VER parses firmware and receiver metadata", () => {
+  const context = loadFunctions(["parseMonVer"], {
+    TextDecoder,
+    receiverFirmware: { textContent: "", title: "" },
+    receiverFirmwareTimeout: null,
+    clearTimeout,
+  });
+  const payload = new Uint8Array(40 + 3 * 30);
+  const fields = ["SW version", "HW 1.00", "FWVER=HPG 2.11", "PROTVER=35.00", "MOD=ZED-X20P"];
+  fields.forEach((field, index) => payload.set(Buffer.from(field), index < 2 ? (index === 0 ? 0 : 30) : 40 + (index - 2) * 30));
+  const version = context.parseMonVer(payload);
+  assert.equal(version.firmware, "HPG 2.11");
+  assert.equal(version.model, "ZED-X20P");
+  assert.equal(version.protocol, "35.00");
+  assert.equal(context.receiverFirmware.textContent, "FW: HPG 2.11 (ZED-X20P)");
+  assert.match(context.receiverFirmware.title, /Hardware: HW 1\.00; Protocol: 35\.00/);
+});
+
+test("UBX dispatcher routes MON-VER responses", () => {
+  const payload = new Uint8Array([1]);
+  const received = [];
+  const context = loadFunctions(["handleUbx"], { pendingInterfacePoll: null, parseMonVer: (value) => received.push(value) });
+  context.handleUbx(0x0a, 0x04, payload);
+  assert.deepEqual(received, [payload]);
+});
+
+test("HAS configuration is only sent to X20 and feature values follow settings", () => {
+  const context = loadFunctions(["gnssFeatureConfigurationRequests"], {});
+  const requests = (receiverName, enableOsnma, enableGalHas) => JSON.parse(JSON.stringify(context.gnssFeatureConfigurationRequests(receiverName, enableOsnma, enableGalHas)));
+  assert.deepEqual(requests("x20", true, true), [
+    ["Galileo OSNMA", 0x10350005, 1, 1],
+    ["Galileo HAS", 0x100d0002, 1, 1],
+  ]);
+  assert.deepEqual(requests("x20", false, false), [
+    ["Galileo OSNMA", 0x10350005, 0, 1],
+    ["Galileo HAS", 0x100d0002, 0, 1],
+  ]);
+  assert.deepEqual(requests("f9p", true, true), [["Galileo OSNMA", 0x10350005, 1, 1]]);
+});
+
+test("Configure all receiver interfaces controls X20 output routing", () => {
+  const context = loadFunctions(["receiverInterfaceRequests"], { receiver: { value: "x20" } });
+  const requestList = [
+    ["UART1 NMEA output off", 0x10740002, 0, 4],
+    ["MON-SPAN UART1", 0x2091038c, 1, 1],
+    ["NAV-PVT UART1", 0x20910007, 1, 1],
+  ];
+  const requests = (allInterfaces) => JSON.parse(JSON.stringify(context.receiverInterfaceRequests(requestList, allInterfaces)));
+  const uart1Only = requests(false);
+  assert.ok(uart1Only.some(([name]) => name === "MON-SPAN UART1"));
+  assert.ok(!uart1Only.some(([name]) => name === "MON-SPAN USB"));
+  assert.ok(!uart1Only.some(([name]) => name === "USB UBX output on"));
+  const allPorts = requests(true);
+  assert.ok(allPorts.some(([name, key]) => name === "MON-SPAN USB" && key === 0x2091038e));
+  assert.ok(allPorts.some(([name, key]) => name === "NAV-PVT USB" && key === 0x20910009));
+  assert.ok(allPorts.some(([name]) => name === "USB UBX output on"));
+});
+
+test("NAV-SAT HAS correction flags count GPS and Galileo independently", () => {
+  const context = loadFunctions(["parseHasCorrectionCounts"], { DataView });
+  const payload = new Uint8Array(8 + 4 * 12);
+  payload[5] = 4;
+  const data = new DataView(payload.buffer);
+  payload[8] = 0; payload[9] = 1;
+  data.setUint32(16, 0x02000000, true);
+  payload[20] = 2; payload[21] = 3;
+  data.setUint32(28, 0x02000000, true);
+  payload[32] = 0; payload[33] = 5;
+  data.setUint32(40, 0x00000008, true);
+  payload[44] = 6; payload[45] = 7;
+  data.setUint32(52, 0x02000000, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.parseHasCorrectionCounts(payload))), { gps: 1, galileo: 1 });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.parseHasCorrectionCounts(new Uint8Array(7)))), null);
 });
 
 test("interface detection polls MON-COMMS and displays its parsed result", async () => {
@@ -251,7 +379,8 @@ test("map accepts only valid position fixes", () => {
   const positionRecenter = { disabled: true };
   const positionZoomIn = { disabled: true };
   const positionZoomOut = { disabled: true };
-  const context = loadFunctions(["parseNavPvt"], {
+  const context = loadFunctions(["parseNavPvt", "positionSourceForReceiver"], {
+    receiver: { value: "x20" }, settings: { positionSource: "NAV" },
     DataView, positionFixes: [], positionEmpty: {}, positionInfo: {}, positionPanel, positionRecenter, positionZoomIn, positionZoomOut,
     receiverThreat: { monRfJam: 0, navSpoof: 0, secJam: 0, secSpoof: 0 }, replayRebuilding: false,
     latLonToUtm33: () => ({}), drawPositionTrack() { trackDraws += 1; }, updatePositionMap() { mapUpdates += 1; }, updateReceiverStatus() {}, refreshOsnmaClock() {},
@@ -262,19 +391,26 @@ test("map accepts only valid position fixes", () => {
     context.parseNavPvt(payload);
     assert.equal(context.positionFixes.length, pointCount);
   }
+  const nav2Fix = new Uint8Array(92); nav2Fix[20] = 3; nav2Fix[21] = 1;
+  context.parseNavPvt(nav2Fix, "NAV2");
+  assert.equal(context.positionFixes.length, 3);
+  context.settings.positionSource = "NAV2";
+  context.parseNavPvt(nav2Fix, "NAV2");
+  assert.equal(context.positionFixes.length, 4);
+  assert.equal(context.positionFixes.at(-1).positionSource, "NAV2");
   assert.equal(trackDraws, 0);
   assert.equal(mapUpdates, 0);
   assert.equal(positionRecenter.disabled, false);
   assert.equal(positionZoomIn.disabled, false);
   assert.equal(positionZoomOut.disabled, false);
   positionPanel.hidden = false;
-  context.parseNavPvt(Object.assign(new Uint8Array(92), { 20: 3, 21: 1 }));
+  context.parseNavPvt(Object.assign(new Uint8Array(92), { 20: 3, 21: 1 }), "NAV2");
   assert.equal(trackDraws, 1);
   assert.equal(mapUpdates, 1);
 });
 
 test("NAV-PVT clock parsing retains confirmation flags and time accuracy", () => {
-  const context = loadFunctions(["parseNavPvt"], { DataView, refreshOsnmaClock() {} });
+  const context = loadFunctions(["parseNavPvt", "positionSourceForReceiver"], { DataView, receiver: { value: "x20" }, settings: { positionSource: "NAV" }, refreshOsnmaClock() {} });
   const payload = new Uint8Array(92);
   const data = new DataView(payload.buffer);
   data.setUint16(4, 2026, true); payload[6] = 10; payload[7] = 19; payload[8] = 3; payload[9] = 4; payload[10] = 5;
@@ -307,6 +443,7 @@ test("OSNMA clock shows receiver freshness, local-time preference, and separate 
   const now = 100000;
   const state = () => ({ textContent: "", dataset: {} });
   const context = loadFunctions(["refreshOsnmaClock"], {
+    settings: { enableOsnma: true },
     latestPvtClock: { utcMs: Date.UTC(2026, 9, 19), receivedAt: now - 125, tAccNs: 80, validDate: true, validTime: true, fullyResolved: true, confirmedDate: true, confirmedTime: true },
     latestTimeUtcClock: null, osnmaClockSettings: { showLocalTime: false },
     osnmaClockValue: state(), osnmaClockAge: state(), osnmaClockPvt: state(), osnmaClockTimeUtc: state(), osnmaClockAuth: state(),
@@ -321,6 +458,11 @@ test("OSNMA clock shows receiver freshness, local-time preference, and separate 
   context.osnmaClockSettings.showLocalTime = true;
   context.refreshOsnmaClock(now);
   assert.match(context.osnmaClockValue.textContent, /local$/);
+  context.settings.enableOsnma = false;
+  context.refreshOsnmaClock(now);
+  assert.equal(context.osnmaClockAuth.textContent, "OSNMA disabled in settings");
+  assert.equal(context.osnmaClockAuth.dataset.state, "off");
+  context.settings.enableOsnma = true;
   context.latestOsnmaStatus.timSyncStatus = 4;
   context.latestOsnmaStatus.timingAuthResult = 2;
   context.latestOsnmaTimeCheck.status = 4;
@@ -377,6 +519,7 @@ test("position grid interval follows the 1-5 metric sequence as zoom changes", (
 test("OSNMA age boundaries and receiver state colors", () => {
   const names = ["osnmaLastUpdate", "osnmaServiceState", "osnmaTimeSyncState", "osnmaTimeDelta", "osnmaHeaderAuth", "osnmaDsmAuth", "osnmaTeslaAuth", "osnmaTimingAuth", "osnmaReceiverStatus"];
   const context = loadFunctions(["osnmaCodeState", "osnmaRetainedResultState", "refreshOsnmaIndicators"], {
+    settings: { enableOsnma: true },
     ...Object.fromEntries(names.map((name) => [name, { dataset: {} }])),
     latestOsnmaTimeCheck: null, latestOsnmaStatus: null, retainedOsnmaCodes: {}, refreshLocalClock() {},
   });
@@ -397,9 +540,23 @@ test("OSNMA age boundaries and receiver state colors", () => {
   assert.equal(context.osnmaReceiverStatus.dataset.state, "bad");
 });
 
+test("disabled OSNMA remains clearly disabled during periodic refresh", () => {
+  const names = ["osnmaLastUpdate", "osnmaServiceState", "osnmaTimeSyncState", "osnmaTimeDelta", "osnmaHeaderAuth", "osnmaDsmAuth", "osnmaTeslaAuth", "osnmaTimingAuth", "osnmaReceiverStatus", "osnmaAuthStatus"];
+  const context = loadFunctions(["refreshOsnmaIndicators"], {
+    settings: { enableOsnma: false },
+    ...Object.fromEntries(names.map((name) => [name, { textContent: "", dataset: {} }])),
+    refreshLocalClock() {},
+  });
+  context.refreshOsnmaIndicators(100000);
+  assert.equal(context.osnmaReceiverStatus.textContent, "Disabled by settings");
+  assert.equal(context.osnmaReceiverStatus.dataset.state, "off");
+  assert.equal(context.osnmaAuthStatus.dataset.state, "off");
+});
+
 test("periodic OSNMA indicators retain success until the expected update is overdue", () => {
   const names = ["osnmaLastUpdate", "osnmaServiceState", "osnmaTimeSyncState", "osnmaTimeDelta", "osnmaHeaderAuth", "osnmaDsmAuth", "osnmaTeslaAuth", "osnmaTimingAuth", "osnmaReceiverStatus"];
   const context = loadFunctions(["osnmaCodeState", "osnmaRetainedResultState", "refreshOsnmaIndicators"], {
+    settings: { enableOsnma: true },
     ...Object.fromEntries(names.map((name) => [name, { dataset: {} }])),
     latestOsnmaStatus: { ...workingStatus(), timSyncStatus: 0, timingAuthResult: 0, dsmAuthenticationStatus: 0, teslaKeyAuthStatus: 0 },
     latestOsnmaTimeCheck: { status: 3, receivedAt: 90000 },
@@ -459,7 +616,7 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   const sample = { offsetMs: 0, connectionId: 1, awaitingCheck: false };
   const sent = [];
   const context = loadFunctions(["canCorrectLocalClock", "refreshLocalClock", "updateLocalClock", "resetLocalClock", "osnmaCodeState", "buildTrustedComputerUtcPayload", "sendTrustedClockTime"], {
-    Date: Clock, Uint8Array, DataView, port: {}, writer: {}, reading: true, replayData: null,
+    Date: Clock, Uint8Array, DataView, settings: { enableOsnma: true }, port: {}, writer: {}, reading: true, replayData: null,
     latestReceiverUtc: null, latestOsnmaStatus: workingStatus(), liveConnectionId: 1,
     trustedClockSample: sample, trustedClockUpdatePending: false,
     latestOsnmaTimeCheck: { differenceMs: -513, status: 3, receivedAt: 99000, trustedClockSample: sample, authenticated: true },
@@ -468,6 +625,9 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
     osnmaClockSettings: { accuracySeconds: 1 }, setStatus() {},
     async sendMgaAssistance(payload, messageId) { sent.push({ payload, messageId }); return { accepted: true }; },
   });
+  context.settings.enableOsnma = false;
+  assert.equal(context.canCorrectLocalClock(), false);
+  context.settings.enableOsnma = true;
   const assistanceBefore = Array.from(context.buildTrustedComputerUtcPayload());
   assert.equal(context.canCorrectLocalClock(), true);
   const correction = context.updateLocalClock();
@@ -521,6 +681,7 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
 test("trusted UTC is sent only by explicit action after opt-in", async () => {
   let sendCount = 0;
   const context = loadFunctions(["sendTrustedTimeNow"], {
+    settings: { enableOsnma: true },
     osnmaClockSettings: { useComputerClock: false },
     osnmaTrustedTimeStatus: {}, configureButton: { disabled: false },
     writer: {}, reading: true, replayData: null, liveConnectionId: 1,
@@ -587,7 +748,7 @@ test("OSNMA correction waits for a new check cycle after each accepted trusted U
 
 test("UTC capture includes signed nanoseconds and excludes unresolved or replay time", () => {
   const context = loadFunctions(["updateReceiverStatus"], {
-    fixStatus: {}, gpsTime: {}, clockOffset: {}, latestPosition: {}, altitudeStatus: {}, speedStatus: {}, headingStatus: {},
+    fixStatus: {}, gpsTime: {}, clockOffset: {}, latitudeStatus: {}, longitudeStatus: {}, altitudeStatus: {}, speedStatus: {}, headingStatus: {},
     port: {}, reading: true, replayData: null, appClockOffsetMs: 0, latestReceiverUtc: null, liveConnectionId: 1,
   });
   const fix = { year: 2026, month: 10, day: 15, hour: 10, minute: 30, second: 0, nano: -250000000, valid: 7, fixType: 5, positionValid: false };
