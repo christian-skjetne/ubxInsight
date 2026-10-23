@@ -32,18 +32,29 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
-test("legacy settings preserve OSNMA and default position source to NAV", () => {
-  const defaults = { configureAllInterfaces: false, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: false, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
+test("legacy settings use enabled map and interface defaults and preserve explicit choices", () => {
+  const defaults = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const context = loadFunctions(["loadSettings"], {
     DEFAULT_SETTINGS: defaults,
     SETTINGS_KEY: "settings",
     localStorage: { getItem: () => JSON.stringify({ lastReceiver: "x20", baudByReceiver: { x20: 38400 } }) },
   });
   const settings = context.loadSettings();
+  assert.equal(settings.configureAllInterfaces, true);
   assert.equal(settings.enableOsnma, true);
   assert.equal(settings.enableGalHas, false);
   assert.equal(settings.positionSource, "NAV");
+  assert.equal(settings.darkMap, true);
   assert.equal(settings.lastReceiver, "x20");
+
+  const explicitContext = loadFunctions(["loadSettings"], {
+    DEFAULT_SETTINGS: defaults,
+    SETTINGS_KEY: "settings",
+    localStorage: { getItem: () => JSON.stringify({ configureAllInterfaces: false, darkMap: false }) },
+  });
+  const explicitSettings = explicitContext.loadSettings();
+  assert.equal(explicitSettings.configureAllInterfaces, false);
+  assert.equal(explicitSettings.darkMap, false);
 });
 
 test("position-source setting keeps NAV2 preference for X20 but falls back to NAV on F9P", () => {
