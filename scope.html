@@ -79,7 +79,7 @@
       </section>
       <div id="position-views">
         <section class="position-view"><header><h2>GNSS Position Track (UTM33N)</h2><div class="track-controls"><button id="position-recenter" class="secondary track-control" type="button" aria-label="Center latest position" title="Center latest position" disabled><span class="material-symbols-outlined" aria-hidden="true">my_location</span></button><button id="position-zoom-in" class="secondary track-control" type="button" aria-label="Zoom in" title="Zoom in" disabled><span class="material-symbols-outlined" aria-hidden="true">add</span></button><button id="position-zoom-out" class="secondary track-control" type="button" aria-label="Zoom out" title="Zoom out" disabled><span class="material-symbols-outlined" aria-hidden="true">remove</span></button></div><div class="track-legend" aria-label="Track status legend"><span class="track-normal">Normal</span><b aria-hidden="true">|</b><span class="track-warning">Warning</span><b aria-hidden="true">|</b><span class="track-critical">Critical</span></div></header><canvas id="position-track"></canvas></section>
-        <section class="position-view"><header><h2>Live Map</h2><div class="track-legend" aria-label="Track status legend"><span class="track-normal">Normal</span><b aria-hidden="true">|</b><span class="track-warning">Warning</span><b aria-hidden="true">|</b><span class="track-critical">Critical</span></div></header><div id="position-map"></div></section>
+        <section id="position-map-view" class="position-view"><header><h2>Live Map</h2><div class="track-legend" aria-label="Track status legend"><span class="track-normal">Normal</span><b aria-hidden="true">|</b><span class="track-warning">Warning</span><b aria-hidden="true">|</b><span class="track-critical">Critical</span></div><button id="position-map-expand" class="secondary track-control" type="button" aria-label="Expand live map" title="Expand live map" aria-haspopup="dialog" aria-expanded="false" aria-controls="position-map-dialog"><span class="material-symbols-outlined" aria-hidden="true">open_in_full</span></button></header><div id="position-map"></div></section>
       </div>
       <p id="position-info">No position data.</p>
     </section>
@@ -204,6 +204,7 @@
       <p class="osnma-note">The receiver is provisioned with the public key and applicable Merkle root from the selected OSNMA folder. The package signature and key metadata are checked before sending; the X.509 issuer chain is not validated.</p>
     </section>
   </main>
+  <dialog id="position-map-dialog" aria-label="Expanded live map"></dialog>
   <dialog id="playback-dialog">
     <div class="playback-shell">
       <div id="playback-head" class="settings-head playback-head"><h2>UBX Playback</h2><button type="button" id="playback-collapse" class="secondary icon-button" aria-label="Collapse playback" title="Collapse playback"><span class="material-symbols-outlined" aria-hidden="true">expand_less</span></button><button type="button" id="playback-close" class="secondary icon-button" aria-label="Hide playback" title="Hide playback"><span class="material-symbols-outlined" aria-hidden="true">close</span></button></div>

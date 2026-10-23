@@ -188,6 +188,11 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .osnma-data td code { overflow-wrap: anywhere; color: #9dd9d0; font-size: 11px; }
 dialog { width: min(390px, calc(100% - 32px)); border: 1px solid var(--line); border-radius: 6px; padding: 0; color: var(--text); background: var(--surface); }
 dialog::backdrop { background: rgba(0, 0, 0, .62); }
+#position-map-dialog { width: calc(100vw - 32px); height: calc(100dvh - 32px); max-width: none; max-height: none; overflow: hidden; }
+#position-map-dialog > .position-view { display: flex; flex-direction: column; height: 100%; border: 0; border-radius: 0; }
+#position-map-dialog header { flex-shrink: 0; flex-wrap: wrap; }
+#position-map-dialog #position-map { flex: 1; min-height: 0; height: auto; }
+#position-map-expand { flex-shrink: 0; }
 #playback-dialog { position: fixed; inset: auto; top: 88px; right: 18px; left: auto; margin: 0; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); z-index: 1000; }
 #playback-dialog::backdrop { background: transparent; pointer-events: none; }
 .settings-head { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }

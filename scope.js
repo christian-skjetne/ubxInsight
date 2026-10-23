@@ -81,6 +81,10 @@
   const osnmaTab = document.querySelector("#osnma-tab");
   const spectrumPanel = document.querySelector("#spectrum-panel");
   const positionPanel = document.querySelector("#position-panel");
+  const positionMapView = document.querySelector("#position-map-view");
+  const positionMapHome = document.querySelector("#position-views");
+  const positionMapDialog = document.querySelector("#position-map-dialog");
+  const positionMapExpand = document.querySelector("#position-map-expand");
   const positionComparisonPanel = document.querySelector("#position-comparison");
   const positionComparisonStatus = document.querySelector("#position-comparison-status");
   const positionComparisonEpoch = document.querySelector("#position-comparison-epoch");
@@ -972,6 +976,22 @@
   positionRecenter.addEventListener("click", recenterPositionTrack);
   positionZoomIn.addEventListener("click", () => zoomPositionTrack(0.8));
   positionZoomOut.addEventListener("click", () => zoomPositionTrack(1.25));
+
+  function setPositionMapExpanded(expanded) {
+    if (expanded) {
+      positionMapDialog.append(positionMapView);
+      if (!positionMapDialog.open) positionMapDialog.showModal();
+    } else {
+      if (positionMapDialog.open) positionMapDialog.close();
+      positionMapHome.append(positionMapView);
+    }
+    positionMapExpand.setAttribute("aria-expanded", String(expanded));
+    positionMapExpand.setAttribute("aria-label", expanded ? "Restore live map" : "Expand live map");
+    positionMapExpand.title = expanded ? "Restore live map" : "Expand live map";
+    positionMapExpand.querySelector(".material-symbols-outlined").textContent = expanded ? "close_fullscreen" : "open_in_full";
+    positionMapExpand.focus();
+    requestAnimationFrame(() => { positionMap?.invalidateSize(); mapLibreMap?.resize(); });
+  }
 
   function updatePositionMap(fix, droppedOldestFix = false) {
     if (settings.darkMap || location.protocol === "file:") { updateVectorPositionMap(fix); return; }
@@ -2594,11 +2614,15 @@
     drawSignals();
   });
   settingsButton.addEventListener("click", () => { syncSettingsForm(); settingsDialog.showModal(); });
+  positionMapExpand.addEventListener("click", () => setPositionMapExpanded(!positionMapDialog.open));
+  positionMapDialog.addEventListener("cancel", (event) => { event.preventDefault(); setPositionMapExpanded(false); });
+  positionMapDialog.addEventListener("close", () => { if (positionMapView.parentElement === positionMapDialog) setPositionMapExpanded(false); });
   systemStatsPanel.addEventListener("toggle", (event) => {
     systemStatsButton.setAttribute("aria-expanded", String(event.newState === "open"));
     positionSystemStats();
   });
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && positionMapDialog.open) setPositionMapExpanded(false);
     if (event.key === "Escape" && systemStatsPanel.matches(":popover-open")) systemStatsPanel.hidePopover();
   });
   window.addEventListener("resize", positionSystemStats);

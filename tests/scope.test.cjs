@@ -789,6 +789,37 @@ test("position comparison renders matching quality, stale and invalid states, an
   assert.equal(context.positionComparisonHorizontal.textContent, "--");
 });
 
+test("live map expansion reuses the map, resizes both engines and restores focus", () => {
+  let leafletResizes = 0; let vectorResizes = 0; let focusCount = 0;
+  const view = {};
+  const dialog = { open: false, append(element) { element.parentElement = this; }, showModal() { this.open = true; }, close() { this.open = false; } };
+  const home = { append(element) { element.parentElement = this; } };
+  const icon = {};
+  const button = { setAttribute(name, value) { this[name] = value; }, querySelector: () => icon, focus() { focusCount += 1; } };
+  const context = loadFunctions(["setPositionMapExpanded"], {
+    positionMapView: view, positionMapDialog: dialog, positionMapHome: home, positionMapExpand: button,
+    positionMap: { invalidateSize() { leafletResizes += 1; } }, mapLibreMap: { resize() { vectorResizes += 1; } },
+    requestAnimationFrame(callback) { callback(); },
+  });
+  context.setPositionMapExpanded(true);
+  assert.equal(dialog.open, true);
+  assert.equal(view.parentElement, dialog);
+  assert.equal(button["aria-expanded"], "true");
+  assert.equal(button["aria-label"], "Restore live map");
+  assert.equal(icon.textContent, "close_fullscreen");
+  context.setPositionMapExpanded(false);
+  assert.equal(dialog.open, false);
+  assert.equal(view.parentElement, home);
+  assert.equal(button["aria-expanded"], "false");
+  assert.equal(button["aria-label"], "Expand live map");
+  assert.equal(icon.textContent, "open_in_full");
+  assert.equal(leafletResizes, 2);
+  assert.equal(vectorResizes, 2);
+  assert.equal(focusCount, 2);
+  context.positionMap = null; context.mapLibreMap = null;
+  assert.doesNotThrow(() => context.setPositionMapExpanded(true));
+});
+
 test("map accepts only valid position fixes", () => {
   let trackDraws = 0;
   let mapUpdates = 0;
