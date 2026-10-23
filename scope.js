@@ -81,6 +81,13 @@
   const osnmaTab = document.querySelector("#osnma-tab");
   const spectrumPanel = document.querySelector("#spectrum-panel");
   const positionPanel = document.querySelector("#position-panel");
+  const positionComparisonPanel = document.querySelector("#position-comparison");
+  const positionComparisonStatus = document.querySelector("#position-comparison-status");
+  const positionComparisonEpoch = document.querySelector("#position-comparison-epoch");
+  const positionComparisonHorizontal = document.querySelector("#position-comparison-horizontal");
+  const positionComparisonVertical = document.querySelector("#position-comparison-vertical");
+  const positionComparisonQuality = document.querySelector("#position-comparison-quality");
+  const positionComparisonState = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
   const signalsPanel = document.querySelector("#signals-panel");
   const osnmaPanel = document.querySelector("#osnma-panel");
   const osnmaInputStatus = document.querySelector("#osnma-input-status");
@@ -283,6 +290,7 @@
   }
   function resetReplayDerivedViews(removeMaps = true) {
     resetLocalClock();
+    resetPositionComparison();
     interfaceRxState = { counters: new Map(), name: null }; receiverInterface.textContent = "Interface: --";
     receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
     resetWaterfallHistory(); positionFixes = []; positionView = null; positionDrag = null; positionEmpty.hidden = false; positionInfo.textContent = "No position data.";
@@ -1056,8 +1064,79 @@
     mapLibreMap.panTo([fix.longitude, fix.latitude], { animate: false });
   }
 
+  function resetPositionComparison() {
+    positionComparisonState.epochs.clear(); positionComparisonState.latest = { NAV: null, NAV2: null }; positionComparisonState.pair = null;
+    positionComparisonState.pendingSince = null;
+    renderPositionComparison();
+  }
+
+  function recordPositionSolution(payload, source) {
+    if (payload.length < 92 || !["NAV", "NAV2"].includes(source)) return;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const iTow = data.getUint32(0, true);
+    if (iTow >= 604800000) return;
+    const latitude = data.getInt32(28, true) / 1e7; const longitude = data.getInt32(24, true) / 1e7;
+    const fixType = payload[20]; const flags = payload[21];
+    const sample = { iTow, latitude, longitude, height: data.getInt32(32, true) / 1000, hAcc: data.getUint32(40, true) / 1000, vAcc: data.getUint32(44, true) / 1000, fixType, flags, satellites: payload[23], receivedAt: Date.now(), positionValid: Boolean(flags & 1) && [2, 3, 4].includes(fixType) && !(payload[78] & 1) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 };
+    const isNewer = (tow, previous) => !previous || (tow - previous.iTow + 604800000) % 604800000 < 302400000;
+    if (isNewer(iTow, positionComparisonState.latest[source])) positionComparisonState.latest[source] = sample;
+    if (!positionComparisonState.epochs.has(iTow)) positionComparisonState.epochs.set(iTow, {});
+    const epoch = positionComparisonState.epochs.get(iTow); epoch[source] = sample;
+    if (epoch.NAV && epoch.NAV2 && isNewer(iTow, positionComparisonState.pair?.NAV)) positionComparisonState.pair = { NAV: epoch.NAV, NAV2: epoch.NAV2 };
+    while (positionComparisonState.epochs.size > 60) positionComparisonState.epochs.delete(positionComparisonState.epochs.keys().next().value);
+    if (!replayRebuilding) renderPositionComparison();
+  }
+
+  function renderPositionComparison(now = Date.now()) {
+    positionComparisonPanel.hidden = receiver.value !== "x20";
+    const pair = positionComparisonState.pair; const latest = positionComparisonState.latest;
+    const delta = pair ? positionSolutionDelta(pair.NAV, pair.NAV2) : null;
+    positionComparisonEpoch.textContent = pair ? `${pair.NAV.iTow} ms` : "--";
+    positionComparisonHorizontal.textContent = delta ? `${delta.horizontal.toFixed(3)} m` : "--";
+    positionComparisonVertical.textContent = delta?.vertical !== null && delta?.vertical !== undefined ? `${delta.vertical >= 0 ? "+" : ""}${delta.vertical.toFixed(3)} m` : "--";
+    const stale = !replayData && pair && now - Math.min(pair.NAV.receivedAt, pair.NAV2.receivedAt) > 5000;
+    const pending = pair && (latest.NAV?.iTow !== pair.NAV.iTow || latest.NAV2?.iTow !== pair.NAV.iTow);
+    if (pending) positionComparisonState.pendingSince ??= now;
+    else positionComparisonState.pendingSince = null;
+    const awaiting = pending && now - positionComparisonState.pendingSince >= 1000;
+    const invalid = pair && !delta;
+    positionComparisonStatus.dataset.state = stale ? "stale" : invalid ? "invalid" : !pair || awaiting ? "waiting" : "matched";
+    positionComparisonStatus.textContent = !pair ? !latest.NAV ? "Waiting for NAV-PVT" : !latest.NAV2 ? "Waiting for NAV2-PVT" : "Waiting for matching iTOW epochs" : stale ? "Stale matched epoch" : invalid ? "Matched epoch; invalid position fix" : awaiting ? "Last matched epoch; awaiting next match" : "Matched epoch";
+    if (replayData) positionComparisonStatus.textContent += " (recorded)";
+    if (delta && delta.vertical === null) positionComparisonStatus.textContent += "; height unavailable for 2D fix";
+    const fixes = pair || latest;
+    const fixNames = ["No fix", "Dead reckoning", "2D fix", "3D fix", "GNSS + DR", "Time only"];
+    const correction = (fix) => ["", "RTK float", "RTK fixed", "Reserved carrier state"][(fix.flags >> 6) & 3] || (fix.flags & 2 ? "Differential" : "Standalone");
+    const rows = [
+      ["Fix", (fix) => `${fixNames[fix.fixType] || "Unknown"}${fix.positionValid ? "" : " (invalid)"}`],
+      ["Corrections", correction], ["Satellites", (fix) => fix.satellites],
+      ["Horizontal accuracy", (fix) => `${fix.hAcc.toFixed(3)} m`],
+      ["Vertical accuracy", (fix) => fix.fixType >= 3 && fix.fixType <= 4 ? `${fix.vAcc.toFixed(3)} m` : "n/a"],
+    ];
+    positionComparisonQuality.innerHTML = rows.map(([label, format]) => `<tr><th scope="row">${label}</th>${[fixes.NAV, fixes.NAV2].map((fix) => `<td>${fix ? format(fix) : "--"}</td>`).join("")}</tr>`).join("");
+  }
+
+  function positionSolutionDelta(nav, nav2) {
+    if (!nav || !nav2 || nav.iTow !== nav2.iTow || !nav.positionValid || !nav2.positionValid) return null;
+    const radians = Math.PI / 180;
+    const toEcef = (fix) => {
+      const latitude = fix.latitude * radians; const longitude = fix.longitude * radians;
+      const radius = 6378137 / Math.sqrt(1 - 0.00669437999014 * Math.sin(latitude) ** 2);
+      return [radius * Math.cos(latitude) * Math.cos(longitude), radius * Math.cos(latitude) * Math.sin(longitude), radius * (1 - 0.00669437999014) * Math.sin(latitude)];
+    };
+    const origin = toEcef(nav); const target = toEcef(nav2);
+    const difference = target.map((value, index) => value - origin[index]);
+    const latitude = nav.latitude * radians; const longitude = nav.longitude * radians;
+    const east = -Math.sin(longitude) * difference[0] + Math.cos(longitude) * difference[1];
+    const north = -Math.sin(latitude) * Math.cos(longitude) * difference[0] - Math.sin(latitude) * Math.sin(longitude) * difference[1] + Math.cos(latitude) * difference[2];
+    const haversine = Math.sin((nav2.latitude - nav.latitude) * radians / 2) ** 2 + Math.cos(latitude) * Math.cos(nav2.latitude * radians) * Math.sin((nav2.longitude - nav.longitude) * radians / 2) ** 2;
+    const horizontal = Math.hypot(...difference) > 100000 ? 2 * 6371008.8 * Math.asin(Math.sqrt(Math.min(1, haversine))) : Math.hypot(east, north);
+    return { horizontal, vertical: nav.fixType >= 3 && nav2.fixType >= 3 ? nav2.height - nav.height : null };
+  }
+
   function parseNavPvt(payload, positionSource = "NAV") {
     if (payload.length < 92) return;
+    recordPositionSolution(payload, positionSource);
     const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
     const longitude = data.getInt32(24, true) / 1e7;
     const latitude = data.getInt32(28, true) / 1e7;
@@ -2271,7 +2350,7 @@
     } finally { replayRebuilding = false; }
     blockViews.forEach((view) => draw(view));
     if (positionFixes.length) { drawPositionTrack(); if (!positionPanel.hidden) updatePositionMap(positionFixes[positionFixes.length - 1]); }
-    drawSignals(); renderOsnma(); renderReceiverLoad(); renderReceiverTx();
+    drawSignals(); renderOsnma(); renderReceiverLoad(); renderReceiverTx(); renderPositionComparison();
     setStatus(`Replay paused at ${replayData?.length ? Math.round(offset * 100 / replayData.length) : 0}%`);
   }
   function scheduleReplayViewRebuild(offset) {
@@ -2424,13 +2503,14 @@
       await selectedPort.open({ baudRate: rate, bufferSize: 1 << 20 });
       port = selectedPort; writer = port.writable.getWriter(); reading = true;
       resetLocalClock();
+      resetPositionComparison();
       receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
       connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); pollReceiverFirmware(); await detectReceiverInterface(); await configureMonSpan(); setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
     } catch (error) { setStatus(`Connection failed: ${error.message}`); }
     finally { connectButton.disabled = false; }
   }
-  async function disconnect() { reading = false; resetLocalClock(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
+  async function disconnect() { reading = false; resetLocalClock(); resetPositionComparison(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
 
   connectButton.addEventListener("click", () => port ? disconnect() : connect());
   recordButton.addEventListener("click", () => isRecording() ? stopRecording() : startRecording());
@@ -2459,6 +2539,7 @@
   playbackHead.addEventListener("pointercancel", () => { playbackDrag = null; });
   window.addEventListener("resize", clampPlaybackPosition);
   receiver.addEventListener("change", () => { settings.lastReceiver = receiver.value; saveSettings(); syncReceiverBaud(); updateGnssIntegritySettingsForm(); syncPositionSourceForm(); renderHasDiagnostics(); resetPositionSourceDisplay(); });
+  receiver.addEventListener("change", resetPositionComparison);
   baud.addEventListener("change", () => { if (baud.value !== "auto") { settings.baudByReceiver[receiver.value] = Number(baud.value); saveSettings(); } });
   receiver.value = settings.lastReceiver;
   syncReceiverBaud();
@@ -2472,6 +2553,7 @@
   refreshOsnmaClock();
   setInterval(refreshOsnmaIndicators, 1000);
   setInterval(renderHasDiagnostics, 1000);
+  setInterval(renderPositionComparison, 1000);
   setInterval(renderReceiverLoad, 1000);
   setInterval(renderReceiverTx, 1000);
   setInterval(refreshOsnmaClock, 100);

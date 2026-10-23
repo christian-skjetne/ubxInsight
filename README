@@ -93,4 +93,20 @@ message order and content, but not the original host-side timing between serial 
 
 Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 
+### NAV/NAV2 position comparison:
+- On X20, the Position tab compares NAV-PVT and NAV2-PVT at identical `iTOW`
+	epochs, independently of the selected track/map source. Up to 60 epochs are
+	buffered to accommodate delayed output; older arrivals do not replace newer pairs.
+- Horizontal separation uses local WGS84 geometry (a spherical surface-distance
+	approximation for separations over 100 km). Signed vertical difference is NAV2
+	minus NAV ellipsoid height, and requires valid 3D fixes from both streams.
+- The paired solutions show fix type, correction state, satellites, and reported
+	horizontal/vertical accuracy. Missing, invalid, unmatched, and stale data are
+	labelled; live matched samples become stale after five seconds. Replay is labelled
+	recorded, not live. Connection changes and replay resets clear the comparison.
+- NAV2 is GNSS standalone and can legitimately differ from the primary solution.
+	No spoofing threshold is inferred: differing correction/filter/authentication
+	policies can cause separation, while shared signal attacks may move both solutions
+	together. Position agreement does not prove signal authenticity.
+
 

@@ -671,15 +671,135 @@ test("Node MON-COMMS probe decodes bidirectional activity and split UBX frames",
   assert.equal(second.frames[0][3], 0x36);
 });
 
+test("NAV/NAV2 separation requires matching valid epochs and uses ellipsoid height", () => {
+  const context = loadFunctions(["positionSolutionDelta"], {});
+  const nav = { iTow: 1000, latitude: 0, longitude: 0, height: 100, fixType: 3, positionValid: true };
+  const nav2 = { ...nav, longitude: 0.00001, height: 102.5 };
+  const delta = context.positionSolutionDelta(nav, nav2);
+  assert.ok(Math.abs(delta.horizontal - 1.1131949) < 0.00001);
+  assert.equal(delta.vertical, 2.5);
+  assert.equal(context.positionSolutionDelta(nav, { ...nav2, iTow: 2000 }), null);
+  assert.equal(context.positionSolutionDelta(nav, { ...nav2, positionValid: false }), null);
+  assert.equal(context.positionSolutionDelta(nav, { ...nav2, fixType: 2 }).vertical, null);
+  assert.equal(context.positionSolutionDelta(nav, nav).horizontal, 0);
+  const dateline = context.positionSolutionDelta({ ...nav, longitude: 179.99999 }, { ...nav2, longitude: -179.99999 });
+  assert.ok(dateline.horizontal < 2.23 && dateline.horizontal > 2.22);
+  assert.ok(context.positionSolutionDelta(nav, { ...nav2, longitude: 180 }).horizontal > 20000000);
+});
+
+test("position comparison buffers delayed epochs and rejects invalid fixes without replacing newer pairs", () => {
+  const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
+  const context = loadFunctions(["recordPositionSolution", "positionSolutionDelta"], {
+    positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {},
+  });
+  const payload = (epoch, flags = 1) => {
+    const bytes = new Uint8Array(92); const data = new DataView(bytes.buffer);
+    data.setUint32(0, epoch, true); bytes[20] = 3; bytes[21] = flags;
+    data.setInt32(32, 100000, true); data.setUint32(40, 1500, true); data.setUint32(44, 2500, true);
+    return bytes;
+  };
+  context.recordPositionSolution(payload(1000), "NAV");
+  context.recordPositionSolution(payload(2000), "NAV");
+  context.recordPositionSolution(payload(1000), "NAV2");
+  assert.equal(state.pair.NAV.iTow, 1000);
+  assert.equal(state.pair.NAV.hAcc, 1.5);
+  context.recordPositionSolution(payload(2000), "NAV2");
+  assert.equal(state.pair.NAV.iTow, 2000);
+  context.recordPositionSolution(payload(1000), "NAV");
+  assert.equal(state.pair.NAV.iTow, 2000);
+  assert.equal(state.latest.NAV.iTow, 2000);
+  const invalid = payload(2000); invalid[78] = 1;
+  context.recordPositionSolution(invalid, "NAV2");
+  assert.equal(context.positionSolutionDelta(state.pair.NAV, state.pair.NAV2), null);
+  context.recordPositionSolution(payload(3000, 0), "NAV");
+  assert.equal(state.latest.NAV.positionValid, false);
+  const outsideEarth = payload(4000); new DataView(outsideEarth.buffer).setInt32(28, 910000000, true);
+  context.recordPositionSolution(outsideEarth, "NAV");
+  assert.equal(state.latest.NAV.positionValid, false);
+  for (let index = 5; index < 100; index++) context.recordPositionSolution(payload(index * 1000), "NAV");
+  assert.equal(state.epochs.size, 60);
+  state.latest = { NAV: null, NAV2: null }; state.pair = null; state.epochs.clear();
+  for (const epoch of [604799000, 0]) for (const source of ["NAV", "NAV2"]) context.recordPositionSolution(payload(epoch), source);
+  assert.equal(state.pair.NAV.iTow, 0);
+});
+
+test("position comparison renders matching quality, stale and invalid states, and resets", () => {
+  const sample = { iTow: 1000, latitude: 0, longitude: 0, height: 100, fixType: 3, positionValid: true, flags: 0x83, satellites: 22, hAcc: 0.02, vAcc: 0.03, receivedAt: 1000 };
+  const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
+  const context = loadFunctions(["renderPositionComparison", "positionSolutionDelta", "resetPositionComparison"], {
+    positionComparisonState: state, receiver: { value: "x20" }, replayData: null,
+    positionComparisonPanel: {}, positionComparisonStatus: { dataset: {} }, positionComparisonEpoch: {},
+    positionComparisonHorizontal: {}, positionComparisonVertical: {}, positionComparisonQuality: {},
+  });
+  context.renderPositionComparison(1000);
+  assert.match(context.positionComparisonStatus.textContent, /Waiting for NAV-PVT/);
+  state.latest.NAV = sample;
+  context.renderPositionComparison(1000);
+  assert.match(context.positionComparisonStatus.textContent, /Waiting for NAV2-PVT/);
+  state.latest.NAV2 = { ...sample, iTow: 2000 };
+  context.renderPositionComparison(1000);
+  assert.match(context.positionComparisonStatus.textContent, /matching iTOW/);
+  state.latest.NAV2 = { ...sample, longitude: 0.00001, height: 102.5, flags: 1 };
+  state.pair = { ...state.latest };
+  context.renderPositionComparison(1000);
+  assert.equal(context.positionComparisonHorizontal.textContent, "1.113 m");
+  assert.equal(context.positionComparisonVertical.textContent, "+2.500 m");
+  assert.match(context.positionComparisonQuality.innerHTML, /RTK fixed.*Standalone/);
+  assert.match(context.positionComparisonQuality.innerHTML, /0.020 m/);
+  state.latest.NAV = { ...sample, iTow: 2000, receivedAt: 1100 };
+  context.renderPositionComparison(1100);
+  assert.equal(context.positionComparisonStatus.textContent, "Matched epoch");
+  assert.equal(context.positionComparisonStatus.dataset.state, "matched");
+  context.renderPositionComparison(2099);
+  assert.equal(context.positionComparisonStatus.textContent, "Matched epoch");
+  state.latest.NAV = { ...sample, iTow: 3000, receivedAt: 2100 };
+  context.renderPositionComparison(2100);
+  assert.match(context.positionComparisonStatus.textContent, /awaiting next match/);
+  assert.equal(context.positionComparisonStatus.dataset.state, "waiting");
+  state.latest.NAV = sample;
+  context.renderPositionComparison(2200);
+  assert.equal(context.positionComparisonStatus.textContent, "Matched epoch");
+  assert.equal(state.pendingSince, null);
+  state.latest.NAV = { ...sample, iTow: 2000, receivedAt: 2300 };
+  context.renderPositionComparison(2300);
+  assert.equal(context.positionComparisonStatus.textContent, "Matched epoch");
+  state.latest.NAV = sample;
+  context.renderPositionComparison(2400);
+  assert.equal(state.pendingSince, null);
+  context.renderPositionComparison(7000);
+  assert.equal(context.positionComparisonStatus.dataset.state, "stale");
+  context.replayData = new Uint8Array(1);
+  context.renderPositionComparison(7000);
+  assert.equal(context.positionComparisonStatus.dataset.state, "matched");
+  assert.match(context.positionComparisonStatus.textContent, /recorded/);
+  state.pair.NAV2.fixType = 2;
+  context.renderPositionComparison(7000);
+  assert.equal(context.positionComparisonVertical.textContent, "--");
+  assert.match(context.positionComparisonStatus.textContent, /height unavailable/);
+  state.pair.NAV2.positionValid = false;
+  context.renderPositionComparison(7000);
+  assert.equal(context.positionComparisonStatus.dataset.state, "invalid");
+  assert.equal(context.positionComparisonHorizontal.textContent, "--");
+  context.receiver.value = "f9p";
+  context.renderPositionComparison(7000);
+  assert.equal(context.positionComparisonPanel.hidden, true);
+  context.resetPositionComparison();
+  assert.equal(state.pair, null);
+  assert.equal(state.pendingSince, null);
+  assert.equal(context.positionComparisonHorizontal.textContent, "--");
+});
+
 test("map accepts only valid position fixes", () => {
   let trackDraws = 0;
   let mapUpdates = 0;
+  const observedSources = [];
   const positionPanel = { hidden: true };
   const positionRecenter = { disabled: true };
   const positionZoomIn = { disabled: true };
   const positionZoomOut = { disabled: true };
   const context = loadFunctions(["parseNavPvt", "positionSourceForReceiver"], {
     receiver: { value: "x20" }, settings: { positionSource: "NAV" },
+    recordPositionSolution(payload, source) { observedSources.push(source); },
     DataView, positionFixes: [], positionEmpty: {}, positionInfo: {}, positionPanel, positionRecenter, positionZoomIn, positionZoomOut,
     receiverThreat: { monRfJam: 0, navSpoof: 0, secJam: 0, secSpoof: 0 }, replayRebuilding: false,
     latLonToUtm33: () => ({}), drawPositionTrack() { trackDraws += 1; }, updatePositionMap() { mapUpdates += 1; }, updateReceiverStatus() {}, refreshOsnmaClock() {},
@@ -693,6 +813,7 @@ test("map accepts only valid position fixes", () => {
   const nav2Fix = new Uint8Array(92); nav2Fix[20] = 3; nav2Fix[21] = 1;
   context.parseNavPvt(nav2Fix, "NAV2");
   assert.equal(context.positionFixes.length, 3);
+  assert.equal(observedSources.at(-1), "NAV2");
   context.settings.positionSource = "NAV2";
   context.parseNavPvt(nav2Fix, "NAV2");
   assert.equal(context.positionFixes.length, 4);
@@ -709,7 +830,7 @@ test("map accepts only valid position fixes", () => {
 });
 
 test("NAV-PVT clock parsing retains confirmation flags and time accuracy", () => {
-  const context = loadFunctions(["parseNavPvt", "positionSourceForReceiver"], { DataView, receiver: { value: "x20" }, settings: { positionSource: "NAV" }, refreshOsnmaClock() {} });
+  const context = loadFunctions(["parseNavPvt", "positionSourceForReceiver"], { DataView, receiver: { value: "x20" }, settings: { positionSource: "NAV" }, recordPositionSolution() {}, refreshOsnmaClock() {} });
   const payload = new Uint8Array(92);
   const data = new DataView(payload.buffer);
   data.setUint16(4, 2026, true); payload[6] = 10; payload[7] = 19; payload[8] = 3; payload[9] = 4; payload[10] = 5;

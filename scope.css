@@ -60,6 +60,14 @@ canvas { display: block; width: 100%; background: #090c12; }
 .spectrum { height: clamp(360px, 38vh, 560px); border-bottom: 1px solid var(--line); cursor: crosshair; }
 .waterfall { height: 440px; image-rendering: pixelated; cursor: crosshair; }
 #position-views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#position-comparison { margin: 0 0 16px; }
+#position-comparison-status { color: var(--muted); font-size: 12px; }
+#position-comparison-status[data-state="stale"], #position-comparison-status[data-state="invalid"] { color: #ffff66; }
+#position-comparison .position-comparison-metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); font-variant-numeric: tabular-nums; }
+.position-comparison-details > summary { padding: 9px 12px; border-block: 1px solid var(--line); background: var(--panel); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
+.position-comparison-table { table-layout: fixed; font-variant-numeric: tabular-nums; }
+.position-comparison-table th, .position-comparison-table td { overflow-wrap: anywhere; }
+.position-comparison-note { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .position-view { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .position-view header { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .position-view h2 { margin: 0; font-size: 14px; }

@@ -64,6 +64,19 @@
     </section>
     <section id="position-panel" role="tabpanel" aria-labelledby="position-tab" hidden>
       <p id="position-empty">Waiting for NAV-PVT position data.</p>
+      <section id="position-comparison" class="osnma-data" aria-labelledby="position-comparison-heading" hidden>
+        <header><h2 id="position-comparison-heading">NAV / NAV2 Solution Comparison</h2><span id="position-comparison-status" data-state="waiting">Waiting for matching epochs</span></header>
+        <div class="osnma-status-grid position-comparison-metrics">
+          <div class="gnss-threat-indicator"><span>Matched iTOW</span><strong id="position-comparison-epoch">--</strong></div>
+          <div class="gnss-threat-indicator"><span>Horizontal separation</span><strong id="position-comparison-horizontal">--</strong></div>
+          <div class="gnss-threat-indicator"><span>Height difference (NAV2 - NAV)</span><strong id="position-comparison-vertical" title="Ellipsoid height difference; requires two valid 3D fixes">--</strong></div>
+        </div>
+        <details class="position-comparison-details" open>
+          <summary>Solution quality</summary>
+          <div class="osnma-table-wrap"><table class="position-comparison-table"><thead><tr><th scope="col">Metric</th><th scope="col">NAV</th><th scope="col">NAV2</th></tr></thead><tbody id="position-comparison-quality"></tbody></table></div>
+        </details>
+        <p class="position-comparison-note">NAV2 is GNSS standalone; corrections and satellite selection can differ. Solution agreement does not establish signal authenticity.</p>
+      </section>
       <div id="position-views">
         <section class="position-view"><header><h2>GNSS Position Track (UTM33N)</h2><div class="track-controls"><button id="position-recenter" class="secondary track-control" type="button" aria-label="Center latest position" title="Center latest position" disabled><span class="material-symbols-outlined" aria-hidden="true">my_location</span></button><button id="position-zoom-in" class="secondary track-control" type="button" aria-label="Zoom in" title="Zoom in" disabled><span class="material-symbols-outlined" aria-hidden="true">add</span></button><button id="position-zoom-out" class="secondary track-control" type="button" aria-label="Zoom out" title="Zoom out" disabled><span class="material-symbols-outlined" aria-hidden="true">remove</span></button></div><div class="track-legend" aria-label="Track status legend"><span class="track-normal">Normal</span><b aria-hidden="true">|</b><span class="track-warning">Warning</span><b aria-hidden="true">|</b><span class="track-critical">Critical</span></div></header><canvas id="position-track"></canvas></section>
         <section class="position-view"><header><h2>Live Map</h2><div class="track-legend" aria-label="Track status legend"><span class="track-normal">Normal</span><b aria-hidden="true">|</b><span class="track-warning">Warning</span><b aria-hidden="true">|</b><span class="track-critical">Critical</span></div></header><div id="position-map"></div></section>
