@@ -64,6 +64,32 @@ test("position-source setting keeps NAV2 preference for X20 but falls back to NA
   assert.equal(context.positionSourceForReceiver("x20", select.value), "NAV2");
 });
 
+test("HAS diagnostics stays collapsed when disabled or unsupported and returns when enabled", () => {
+  const context = loadFunctions(["renderHasDiagnostics"], {
+    receiver: { value: "x20" }, settings: { enableGalHas: false, enableOsnma: false },
+    hasDiagnosticsPanel: {}, hasDiagnosticsStatus: { dataset: {} }, hasNav2Engine: {},
+    hasCoexistWarning: {}, hasNavCount: {}, hasNav2Count: {},
+    hasCorrectionReports: { NAV: null, NAV2: null },
+  });
+  context.renderHasDiagnostics();
+  assert.equal(context.hasDiagnosticsPanel.hidden, true);
+  context.settings.enableGalHas = true;
+  context.renderHasDiagnostics();
+  assert.equal(context.hasDiagnosticsPanel.hidden, false);
+  assert.equal(context.hasNavCount.textContent, "Waiting for NAV-SAT");
+  context.settings.enableOsnma = true;
+  context.renderHasDiagnostics();
+  assert.equal(context.hasDiagnosticsPanel.hidden, false);
+  assert.equal(context.hasCoexistWarning.hidden, false);
+  context.settings.enableGalHas = false;
+  context.renderHasDiagnostics();
+  assert.equal(context.hasDiagnosticsPanel.hidden, true);
+  context.settings.enableGalHas = true;
+  context.receiver.value = "f9p";
+  context.renderHasDiagnostics();
+  assert.equal(context.hasDiagnosticsPanel.hidden, true);
+});
+
 test("HAS settings disable on F9P and warn for the unsupported X20 combination", () => {
   const label = { title: "" };
   const context = loadFunctions(["updateGnssIntegritySettingsForm"], {

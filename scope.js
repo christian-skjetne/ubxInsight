@@ -135,6 +135,7 @@
   const secSecuritySummary = document.querySelector("#sec-security-summary");
   const secEventLog = document.querySelector("#sec-event-log");
   const hasDiagnosticsStatus = document.querySelector("#has-diagnostics-status");
+  const hasDiagnosticsPanel = document.querySelector("#has-diagnostics");
   const hasCoexistWarning = document.querySelector("#has-coexist-warning");
   const hasNavCount = document.querySelector("#has-nav-count");
   const hasNav2Count = document.querySelector("#has-nav2-count");
@@ -1192,6 +1193,7 @@
 
   function renderHasDiagnostics(now = Date.now()) {
     const supported = receiver.value === "x20";
+    hasDiagnosticsPanel.hidden = !supported || !settings.enableGalHas;
     const bothEnabled = supported && settings.enableOsnma && settings.enableGalHas;
     hasNav2Engine.hidden = !supported;
     hasCoexistWarning.hidden = !bothEnabled;
@@ -1202,7 +1204,7 @@
       hasNav2Count.textContent = "Not supported";
       return;
     }
-    hasDiagnosticsStatus.textContent = bothEnabled ? "Both selected; unsupported combination" : settings.enableGalHas ? "HAS enabled in settings" : "HAS disabled in settings";
+    hasDiagnosticsStatus.textContent = bothEnabled ? "Both HAS and OSNMA is enabled; unsupported combination" : settings.enableGalHas ? "HAS enabled in settings" : "HAS disabled in settings";
     hasDiagnosticsStatus.dataset.state = bothEnabled ? "warning" : settings.enableGalHas ? "waiting" : "off";
     const format = (report, name) => {
       if (!report) return `Waiting for ${name}-SAT`;
