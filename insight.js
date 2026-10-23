@@ -925,6 +925,7 @@
     canvas.addEventListener("click", (event) => { if (event.button === 0) updateSignalHover(canvas, event, true); });
     canvas.addEventListener("contextmenu", (event) => { event.preventDefault(); clearSignalHover(canvas); });
   });
+  satelliteSky.closest(".satellite-sky-view").querySelector("header").append(createCanvasExportButton(satelliteSky, "Satellite sky view"));
 
   function latLonToUtm33(latitude, longitude) {
     const semiMajor = 6378137;
