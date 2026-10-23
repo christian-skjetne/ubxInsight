@@ -8,20 +8,52 @@ Requires an F9 or X20-series Ublox receiver.
 - The page can also be opened directly. In `file://` mode the map automatically
 	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
 - Connect the receiver and select `Start recording` to begin capturing raw bytes.
-- In Settings, enable `Configure all receiver interfaces` and select Apply to
-	configure UBX message output on I2C, UART1, UART2, USB and SPI. This also
+- In Settings, enable `Configure UART1, UART2 and USB` and select Apply to
+	configure UBX message output on those three interfaces. This also
 	disables NMEA output on those interfaces; baud rates and input protocols are
 	unchanged. The default remains UART1 only. The selection is saved locally
 	and is applied on connection, on `Send config`, or when changed while connected.
+	Every configuration disables UBX/NMEA output on I2C and SPI, including output
+	enabled by older versions. Input protocols on those buses are not changed.
 	Unsupported interfaces/messages may be rejected individually; inspect the
 	configuration indicator for ACK/NAK results. Configuration is RAM-only.
 
 - The status bar identifies the receiver-side interface using UBX-MON-COMMS
-  port counters, requiring both RX and TX activity. Linux
+  RX byte-counter changes between samples, not historical RX/TX totals. Startup
+	briefly polls for a baseline and new incoming bytes. A single serial port with
+	RX growth confirms UART1, UART2 or USB; idle reports retain the last confirmed
+	port. Multiple receiving ports are ambiguous, so this assumes the app is the
+	only host sending commands. Counter resets require a new baseline. Linux
 	`/dev/ttyACM0` commonly represents native receiver USB, not UART1; USB-to-UART
 	adapters instead reach whichever receiver UART they are wired to. The host
 	device name alone does not establish the receiver-side interface.
 - Select `Stop recording` to download the completed `.ubx` file.
+- The status bar's system-stats icon opens CPU, memory and serial TX readings.
+	It is yellow when any current percentage exceeds 90%, red above 95%, and
+	green otherwise once telemetry is available. Historical peaks do not trigger
+	the indicator. Click outside or press Escape to close the popover.
+- X20 configuration enables UBX-MON-SYS at 1 Hz. System stats shows receiver
+	CPU load and dynamic memory use.
+	Hover each value for its peak since restart. Live readings become stale after
+	three seconds without an update; replay values describe recorded telemetry.
+	Standard F9P firmware does not expose these MON-SYS metrics; values remain `--`.
+- UBX-MON-COMMS is enabled at 1 Hz on the configured serial interfaces. System
+	stats shows separate UART1, UART2 and USB TX buffer percentages and pending bytes.
+	These are queue occupancy, not line bandwidth percentages. Tooltips include peak
+	occupancy, total transmitted bytes and available RX error counters. I2C and SPI
+	are excluded. Missing ports show `--`; stale and replay labels follow MON-SYS.
+- RAWX is requested every measurement epoch with a 1 Hz measurement rate.
+	Slow arrival alone does not establish CPU overload: UART bandwidth can be the
+	bottleneck. For 8N1, 38,400 baud carries at most 3,840 bytes/s. A RAWX frame
+	with 100 measurements needs 3,224 bytes before adding MON-SPAN, navigation,
+	security and other output. Native USB does not have this UART baud limit.
+- Settings has an explicit baud-rate target, defaulting to `USB / host port only`
+	each time the dialog opens. This updates the host serial setting without changing
+	either receiver UART; it does not increase native USB throughput. `UART1 + host
+	port` and `UART2 + host port` configure the selected receiver UART, wait for ACK,
+	and reopen the host port at that rate. Either UART can be configured through USB;
+	the interface-status estimate is not used to choose the target. UART changes
+	require a connected receiver, even when the selected rate matches the host rate.
 - Select `Replay .ubx` to open the playback controls for play/pause, speed and seeking.
 	The `1x` rate is estimated from the selected receiver baud rate.
 

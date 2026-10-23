@@ -24,6 +24,15 @@ header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; bord
 .config-result-ok { color: #66ff88; }
 .config-result-nak, .config-result-write-failed { color: #ff7262; }
 .config-result-unconfirmed { color: #ffff66; }
+.system-stats-button { display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); }
+.system-stats-button .material-symbols-outlined { width: 20px; height: 20px; margin: 0; font-size: 20px; color: currentColor; transform: none; }
+.system-stats-button[data-state="normal"] { color: #66ff88; }
+.system-stats-button[data-state="warning"] { color: #ffff66; }
+.system-stats-button[data-state="critical"] { color: #ff7262; }
+.system-stats-button:hover, .system-stats-button:focus-visible { border-color: currentColor; }
+#system-stats { position: fixed; inset: auto 16px auto auto; width: min(360px, calc(100vw - 32px)); margin: 0; overflow-y: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; background: #111722; color: var(--text); font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+#system-stats h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+#system-stats .status-item { display: flex; white-space: normal; overflow-wrap: anywhere; }
 h1 { margin: 0 auto 0 0; font-size: 17px; font-weight: 600; }
 label { color: var(--muted); }
 select, input, button { height: 32px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); padding: 0 9px; font: inherit; }

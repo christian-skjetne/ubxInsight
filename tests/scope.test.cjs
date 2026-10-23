@@ -137,6 +137,46 @@ test("canvas PNG export downloads a timestamped PNG and revokes its object URL",
   assert.equal(revokedUrl, "blob:graph");
 });
 
+test("RXM-RAWX decodes Doppler per signal and draws successive measurements", () => {
+  let segments = 0;
+  let redraws = 0;
+  const drawing = new Proxy({ lineTo() { segments += 1; } }, {
+    get(target, property) { return target[property] ?? (() => {}); },
+  });
+  const canvas = { getContext: () => drawing };
+  const context = loadFunctions(["appendHistory", "appendSeries", "parseRawx", "drawSignalChart"], {
+    DataView, Number, signalEpoch: { doppler: 0 }, signalHistory: { doppler: new Map() },
+    signalsEmpty: { hidden: false }, replayRebuilding: false, gnssColor: () => "#ffffff",
+    drawSignals() { redraws += 1; }, HISTORY_LENGTH: 600,
+    sizeCanvas: () => ({ width: 800, height: 400 }), window: { devicePixelRatio: 1 },
+    signalChartState: new Map(), signalHover: new Map(),
+  });
+  const payload = new Uint8Array(96).subarray(8, 88);
+  const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  payload[11] = 2;
+  payload[13] = 1;
+  for (const [index, signalId] of [0, 3].entries()) {
+    const offset = 16 + index * 32;
+    payload[offset + 20] = 2;
+    payload[offset + 21] = 12;
+    payload[offset + 22] = signalId;
+    data.setFloat32(offset + 16, -1234.5 - index * 100, true);
+  }
+  context.parseRawx(payload);
+  data.setFloat32(32, -1230.25, true);
+  context.parseRawx(payload);
+  const histories = context.signalHistory.doppler;
+  assert.equal(histories.size, 2);
+  assert.equal(histories.get("2:12:0").values[0].value, -1234.5);
+  assert.equal(histories.get("2:12:0").values[1].value, -1230.25);
+  assert.equal(histories.get("2:12:3").values[1].value, -1334.5);
+  assert.equal(redraws, 2);
+  assert.equal(context.signalsEmpty.hidden, true);
+  context.drawSignalChart(canvas, [...histories.values()], {});
+  assert.equal(context.signalChartState.get(canvas).lastEpoch, 2);
+  assert.equal(segments, 7);
+});
+
 test("signal charts handle accumulated multi-satellite histories without argument overflow", () => {
   const labels = [];
   const drawing = new Proxy({ fillText(text) { labels.push(text); } }, {
@@ -226,19 +266,153 @@ test("GNSS threat summary distinguishes status severity and disabled detection",
   check("navSpoof", 0, "Inactive", "off");
 });
 
-test("MON-COMMS selects a recognized port with both RX and TX activity", () => {
-  const context = loadFunctions(["parseMonCommsInterface"], { receiverInterface: { title: "" } });
+test("system stats thresholds use current CPU, memory and serial TX percentages", () => {
+  const context = loadFunctions(["systemStatsSeverity"], {});
+  const tx = (usage) => ({ ports: new Map([[0x0300, { usage, peak: 100 }]]) });
+  assert.equal(context.systemStatsSeverity(null, null).state, "idle");
+  assert.equal(context.systemStatsSeverity({ cpu: 90, memory: 60, cpuMax: 100, io: 100 }, tx(6)).state, "normal");
+  assert.equal(context.systemStatsSeverity({ cpu: 91 }, null).state, "warning");
+  assert.equal(context.systemStatsSeverity({ memory: 95 }, null).state, "warning");
+  assert.equal(context.systemStatsSeverity({ cpu: 96 }, null).state, "critical");
+  assert.equal(context.systemStatsSeverity(null, tx(96)).state, "critical");
+  assert.equal(context.systemStatsSeverity(null, tx(95)).state, "warning");
+  assert.equal(context.systemStatsSeverity({ cpu: 255, memory: NaN }, tx(255)).state, "idle");
+});
+
+test("system stats indicator exposes severity and stale or replay state", () => {
+  const button = { dataset: {}, setAttribute(name, value) { this[name] = value; } };
+  const context = loadFunctions(["systemStatsSeverity", "renderSystemStatsIndicator"], {
+    systemStatsButton: button, receiverSystemSample: { cpu: 56, memory: 60, receivedAt: 1000 },
+    receiverTxSample: { ports: new Map([[0x0200, { usage: 98 }]]), receivedAt: 1000 },
+    replayData: null, Date: { now: () => 5001 },
+  });
+  context.renderSystemStatsIndicator();
+  assert.equal(button.dataset.state, "critical");
+  assert.match(button["aria-label"], /highest usage 98%.*stale telemetry/);
+  context.replayData = new Uint8Array(1);
+  context.renderSystemStatsIndicator();
+  assert.match(button.title, /recorded telemetry/);
+  assert.doesNotMatch(button.title, /stale/);
+});
+
+test("MON-SYS reports receiver CPU and memory with peaks and stale state", () => {
+  let now = 10000;
+  const context = loadFunctions(["parseMonSys", "renderReceiverLoad", "receiverMonitoringConfigurationRequests"], {
+    receiverCpu: {}, receiverMemory: {}, receiverSystemSample: null,
+    renderSystemStatsIndicator() {},
+    receiver: { value: "x20" }, replayData: null, replayRebuilding: false, Date: { now: () => now },
+  });
+  context.renderReceiverLoad();
+  assert.equal(context.receiverCpu.textContent, "CPU: --");
+  const payload = new Uint8Array(24);
+  payload.set([1, 0, 76, 98, 43, 61, 99, 100]);
+  context.parseMonSys(payload);
+  assert.equal(context.receiverCpu.textContent, "CPU: 76%");
+  assert.equal(context.receiverMemory.textContent, "MEM: 43%");
+  assert.match(context.receiverCpu.title, /peak since restart 98%/);
+  assert.match(context.receiverMemory.title, /peak since restart 61%/);
+  now += 4000;
+  context.renderReceiverLoad();
+  assert.equal(context.receiverCpu.textContent, "CPU: 76% (stale)");
+  context.parseMonSys(new Uint8Array(23));
+  payload[0] = 2;
+  context.parseMonSys(payload);
+  assert.equal(context.receiverSystemSample.receivedAt, 10000);
+  context.replayData = new Uint8Array(1);
+  context.renderReceiverLoad();
+  assert.equal(context.receiverCpu.textContent, "CPU: 76%");
+  assert.match(context.receiverCpu.title, /Recorded MON-SYS/);
+  context.receiverSystemSample = null;
+  context.receiver.value = "f9p";
+  context.renderReceiverLoad();
+  assert.match(context.receiverCpu.title, /not available on standard F9P/);
+  assert.equal(context.receiverMemory.textContent, "MEM: --");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.receiverMonitoringConfigurationRequests("f9p"))), [["MON-COMMS UART1", 0x20910350, 1, 1]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.receiverMonitoringConfigurationRequests("x20"))), [["MON-COMMS UART1", 0x20910350, 1, 1], ["MON-SYS UART1", 0x2091069e, 1, 1]]);
+});
+
+test("MON-COMMS displays only serial TX queues, handles short records and marks stale telemetry", () => {
+  let now = 10000;
+  const uart1 = {}; const uart2 = {}; const usb = {};
+  const context = loadFunctions(["parseMonCommsTx", "renderReceiverTx", "replayFrameGroup"], {
+    receiverTxPorts: [[0x0100, "UART1", uart1], [0x0200, "UART2", uart2], [0x0300, "USB", usb]],
+    receiverTxSample: null, replayData: null, replayRebuilding: false, Date: { now: () => now },
+    renderSystemStatsIndicator() {},
+  });
+  context.renderReceiverTx();
+  assert.equal(usb.textContent, "USB TX: --");
+  const payload = new Uint8Array(8 + 5 * 40);
+  payload[1] = 5;
+  const data = new DataView(payload.buffer);
+  for (let index = 0; index < 5; index++) {
+    const offset = 8 + index * 40;
+    data.setUint16(offset, index * 0x0100, true);
+    data.setUint16(offset + 2, index * 100, true);
+    data.setUint32(offset + 4, 123456, true);
+    payload[offset + 8] = [99, 20, 98, 3, 99][index];
+    payload[offset + 9] = 100;
+    data.setUint16(offset + 18, 4, true);
+    data.setUint32(offset + 36, 12, true);
+  }
+  context.parseMonCommsTx(payload);
+  assert.equal(context.receiverTxSample.ports.size, 3);
+  assert.equal(uart1.textContent, "UART1 TX: 20% (100 B)");
+  assert.equal(uart2.textContent, "UART2 TX: 98% (200 B)");
+  assert.equal(usb.textContent, "USB TX: 3% (300 B)");
+  assert.match(usb.title, /peak 100%.*total transmitted 123456 bytes.*RX overrun timeslots 4.*skipped bytes 12/);
+  now += 4000;
+  context.renderReceiverTx();
+  assert.match(usb.textContent, /\(stale\)/);
+  for (const invalid of [new Uint8Array(7), new Uint8Array(8), payload.subarray(0, payload.length - 1)]) context.parseMonCommsTx(invalid);
+  payload[0] = 1;
+  context.parseMonCommsTx(payload);
+  assert.equal(context.receiverTxSample.receivedAt, 10000);
+  context.replayData = payload;
+  context.renderReceiverTx();
+  assert.equal(usb.textContent, "USB TX: 3% (300 B)");
+  assert.match(usb.title, /Recorded MON-COMMS/);
+  const short = new Uint8Array(24);
+  short[1] = 1;
+  new DataView(short.buffer).setUint16(8, 0x0300, true);
+  short[16] = 255;
+  context.parseMonCommsTx(short);
+  assert.equal(usb.textContent, "USB TX: n/a (0 B)");
+  assert.doesNotMatch(usb.title, /overrun|skipped/);
+  assert.equal(uart1.textContent, "UART1 TX: --");
+  assert.equal(context.replayFrameGroup(0x0a, 0x36), "comms");
+  context.receiverTxSample = null;
+  context.renderReceiverTx();
+  assert.equal(usb.textContent, "USB TX: --");
+});
+
+test("MON-COMMS detects current RX activity instead of historical RX/TX totals", () => {
+  const context = loadFunctions(["parseMonCommsInterface"], { receiverInterface: { title: "" }, interfaceRxState: { counters: new Map(), name: null } });
   const payload = new Uint8Array(8 + 2 * 40);
   payload[0] = 0; payload[1] = 2;
   const data = new DataView(payload.buffer);
   data.setUint16(8, 0x0300, true);
   data.setUint32(12, 10000, true);
-  data.setUint32(20, 0, true);
+  data.setUint32(20, 100, true);
   data.setUint16(48, 0x0100, true);
-  data.setUint32(52, 500, true);
-  data.setUint32(60, 700, true);
-  assert.equal(context.parseMonCommsInterface(payload), "UART1");
-  assert.match(context.receiverInterface.title, /USB: TX 10000, RX 0; UART1: TX 500, RX 700/);
+  data.setUint32(52, 5000000, true);
+  data.setUint32(60, 7000000, true);
+  assert.equal(context.parseMonCommsInterface(payload), null);
+  data.setUint32(20, 108, true);
+  assert.equal(context.parseMonCommsInterface(payload), "USB");
+  assert.match(context.receiverInterface.title, /USB: TX 10000, RX 108 \(\+8\)/);
+  assert.equal(context.parseMonCommsInterface(payload), "USB");
+  data.setUint32(20, 116, true);
+  data.setUint32(60, 7000008, true);
+  assert.equal(context.parseMonCommsInterface(payload), null);
+  assert.match(context.receiverInterface.title, /Ambiguous RX activity/);
+  data.setUint32(20, 124, true);
+  assert.equal(context.parseMonCommsInterface(payload), "USB");
+  data.setUint32(20, 0, true);
+  data.setUint32(60, 0, true);
+  assert.equal(context.parseMonCommsInterface(payload), null);
+  assert.match(context.receiverInterface.title, /RX counters reset/);
+  data.setUint32(20, 8, true);
+  assert.equal(context.parseMonCommsInterface(payload), "USB");
   assert.equal(context.parseMonCommsInterface(new Uint8Array(8)), null);
   const truncated = new Uint8Array(8 + 2 * 15); truncated[1] = 2;
   assert.equal(context.parseMonCommsInterface(truncated), null);
@@ -246,10 +420,22 @@ test("MON-COMMS selects a recognized port with both RX and TX activity", () => {
   assert.equal(context.parseMonCommsInterface(malformed), null);
 });
 
+test("MON-COMMS RX detection handles uint32 wraparound without choosing a new baseline", () => {
+  const context = loadFunctions(["parseMonCommsInterface"], { receiverInterface: {}, interfaceRxState: { counters: new Map(), name: null } });
+  const payload = new Uint8Array(48); payload[1] = 1;
+  const data = new DataView(payload.buffer); data.setUint16(8, 0x0300, true);
+  data.setUint32(20, 0xfffffffc, true);
+  assert.equal(context.parseMonCommsInterface(payload), null);
+  data.setUint32(20, 4, true);
+  assert.equal(context.parseMonCommsInterface(payload), "USB");
+  assert.match(context.receiverInterface.title, /RX 4 \(\+8\)/);
+});
+
 test("UBX dispatcher routes MON-COMMS responses to the pending interface poll", () => {
   const resolved = [];
   const context = loadFunctions(["handleUbx"], {
     pendingInterfacePoll: (name) => resolved.push(name),
+    parseMonCommsTx() {},
     parseMonCommsInterface: () => "USB",
   });
   context.handleUbx(0x0a, 0x36, new Uint8Array(0));
@@ -272,6 +458,24 @@ test("MON-VER parses firmware and receiver metadata", () => {
   assert.equal(version.protocol, "35.00");
   assert.equal(context.receiverFirmware.textContent, "FW: HPG 2.11 (ZED-X20P)");
   assert.match(context.receiverFirmware.title, /Hardware: HW 1\.00; Protocol: 35\.00/);
+});
+
+test("MON-SYS is dispatched, indexed for replay and configured on the selected interfaces", () => {
+  const received = [];
+  const context = loadFunctions(["handleUbx", "replayFrameGroup", "indexReplayFrames", "checksum", "ubxFrame", "receiverMonitoringConfigurationRequests", "receiverInterfaceRequests"], {
+    parseMonSys: (payload) => received.push(payload),
+  });
+  const payload = new Uint8Array(24);
+  payload[0] = 1;
+  context.handleUbx(0x0a, 0x39, payload);
+  assert.deepEqual(received, [payload]);
+  const frames = context.indexReplayFrames(context.ubxFrame(0x0a, 0x39, payload));
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].group, "system");
+  const requests = context.receiverInterfaceRequests(context.receiverMonitoringConfigurationRequests("x20"), true);
+  assert.ok(requests.some(([name, key, rate, size]) => name === "MON-SYS USB" && key === 0x209106a0 && rate === 1 && size === 1));
+  assert.ok(requests.some(([name, key]) => name === "MON-SYS UART1" && key === 0x2091069e));
+  assert.ok(requests.some(([name, key]) => name === "MON-COMMS USB" && key === 0x20910352));
 });
 
 test("UBX dispatcher routes MON-VER responses", () => {
@@ -312,6 +516,13 @@ test("Configure all receiver interfaces controls X20 output routing", () => {
   assert.ok(allPorts.some(([name, key]) => name === "MON-SPAN USB" && key === 0x2091038e));
   assert.ok(allPorts.some(([name, key]) => name === "NAV-PVT USB" && key === 0x20910009));
   assert.ok(allPorts.some(([name]) => name === "USB UBX output on"));
+  assert.ok(allPorts.some(([name]) => name === "MON-SPAN UART2"));
+  for (const configured of [uart1Only, allPorts]) {
+    assert.ok(configured.some(([name, key, value]) => name === "I2C UBX output off" && key === 0x10720001 && value === 0));
+    assert.ok(configured.some(([name, key, value]) => name === "SPI UBX output off" && key === 0x107a0001 && value === 0));
+    assert.ok(!configured.some(([name, , value]) => /I2C|SPI/.test(name) && value !== 0));
+    assert.ok(!configured.some(([name]) => /MON-SPAN (I2C|SPI)/.test(name)));
+  }
 });
 
 test("NAV-SAT HAS correction flags count GPS and Galileo independently", () => {
@@ -331,19 +542,81 @@ test("NAV-SAT HAS correction flags count GPS and Galileo independently", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(context.parseHasCorrectionCounts(new Uint8Array(7)))), null);
 });
 
+test("baud changes target USB/host only by default and require explicit UART selection", async () => {
+  const writes = []; const reconnects = [];
+  const context = loadFunctions(["applyReceiverBaud"], {
+    port: {}, writer: {}, settings: { baudByReceiver: {} }, receiver: { value: "x20" }, baud: {},
+    configurationStatus: {}, configurationTooltip: {}, saveSettings() {}, setStatus() {}, showConfigResults() {},
+    async sendValset(...args) { writes.push(args); return "ack"; },
+    async reconnectAtBaud(rate) { reconnects.push(rate); },
+  });
+  assert.equal(await context.applyReceiverBaud(4000000), "host");
+  assert.equal(writes.length, 0);
+  assert.deepEqual(reconnects, [4000000]);
+  await context.applyReceiverBaud(115200, "UART1");
+  await context.applyReceiverBaud(921600, "UART2");
+  assert.deepEqual(writes, [["UART1 baud rate", 0x40520001, 115200, 4], ["UART2 baud rate", 0x40530001, 921600, 4]]);
+  assert.deepEqual(reconnects, [4000000, 115200, 921600]);
+  context.sendValset = async () => "nak";
+  await assert.rejects(context.applyReceiverBaud(4000000, "UART2"), /UART2 baud rate change nak/);
+  assert.equal(reconnects.length, 3);
+  await assert.rejects(context.applyReceiverBaud(115200, "USB"), /Unknown baud-rate target/);
+  context.port = null; context.writer = null;
+  await assert.rejects(context.applyReceiverBaud(115200, "UART1"), /Connect a receiver/);
+  assert.equal(await context.applyReceiverBaud(115200), "saved");
+  assert.equal(context.settings.baudByReceiver.x20, 115200);
+});
+
 test("interface detection polls MON-COMMS and displays its parsed result", async () => {
   let writtenFrame;
   const context = loadFunctions(["detectReceiverInterface", "ubxFrame", "checksum"], {
-    receiverInterface: { textContent: "" }, pendingInterfacePoll: null,
+    receiverInterface: { textContent: "" }, pendingInterfacePoll: null, interfaceRxState: null,
     writer: { write(frame) { writtenFrame = frame; return Promise.resolve(); } },
-    setTimeout, clearTimeout,
+    setTimeout, clearTimeout, setInterval, clearInterval,
   });
   const detecting = context.detectReceiverInterface();
   assert.equal(writtenFrame[2], 0x0a);
   assert.equal(writtenFrame[3], 0x36);
+  context.pendingInterfacePoll(null);
+  assert.equal(typeof context.pendingInterfacePoll, "function");
   context.pendingInterfacePoll("USB");
   await detecting;
   assert.equal(context.receiverInterface.textContent, "Interface: USB");
+});
+
+test("interface polling collects an RX baseline and a second sample, then stops", async () => {
+  let tick; let expire; let polls = 0; let intervalsCleared = 0;
+  const payload = new Uint8Array(88); payload[1] = 2;
+  const data = new DataView(payload.buffer);
+  data.setUint16(8, 0x0100, true); data.setUint32(20, 9000000, true);
+  data.setUint32(12, 9000000, true); data.setUint16(48, 0x0300, true);
+  const context = loadFunctions(["detectReceiverInterface", "parseMonCommsInterface", "ubxFrame", "checksum"], {
+    receiverInterface: {}, pendingInterfacePoll: null, interfaceRxState: null,
+    setTimeout(callback) { expire = callback; return 1; }, clearTimeout() {},
+    setInterval(callback) { tick = callback; return 2; }, clearInterval() { intervalsCleared += 1; },
+    writer: { write() {
+      polls += 1; data.setUint32(60, polls * 8, true);
+      context.pendingInterfacePoll?.(context.parseMonCommsInterface(payload));
+      return Promise.resolve();
+    } },
+  });
+  const detecting = context.detectReceiverInterface();
+  assert.equal(polls, 1);
+  assert.equal(context.interfaceRxState.name, null);
+  tick();
+  assert.equal(await detecting, "USB");
+  assert.equal(polls, 2);
+  assert.equal(intervalsCleared, 1);
+  assert.equal(context.pendingInterfacePoll, null);
+  assert.equal(context.receiverInterface.textContent, "Interface: USB");
+  expire();
+  assert.equal(intervalsCleared, 1);
+  context.writer = { write: () => Promise.resolve() };
+  const timingOut = context.detectReceiverInterface();
+  expire();
+  assert.equal(await timingOut, null);
+  assert.match(context.receiverInterface.textContent, /no unique RX activity/);
+  assert.equal(intervalsCleared, 2);
 });
 
 test("Node MON-COMMS probe decodes bidirectional activity and split UBX frames", { skip: !monCommsProbe }, () => {

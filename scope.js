@@ -46,6 +46,8 @@
   const headingStatus = document.querySelector("#heading-status");
   const configurationStatus = document.querySelector("#configuration-status");
   const configurationTooltip = configurationStatus.querySelector(".configuration-tooltip");
+  const systemStatsButton = document.querySelector("#system-stats-toggle");
+  const systemStatsPanel = document.querySelector("#system-stats");
   const connectButton = document.querySelector("#connect");
   const configureButton = document.querySelector("#configure");
   const recordButton = document.querySelector("#record");
@@ -144,10 +146,17 @@
   const peakDecay = document.querySelector("#peak-decay");
   const darkMap = document.querySelector("#dark-map");
   const receiverBaud = document.querySelector("#receiver-baud");
+  const receiverBaudTarget = document.querySelector("#receiver-baud-target");
   const configureAllInterfaces = document.querySelector("#configure-all-interfaces");
   const receiverInterface = document.querySelector("#receiver-interface");
   const receiverFirmware = document.querySelector("#receiver-firmware");
+  const receiverCpu = document.querySelector("#receiver-cpu");
+  const receiverMemory = document.querySelector("#receiver-memory");
+  const receiverTxPorts = [[0x0100, "UART1", document.querySelector("#receiver-tx-uart1")], [0x0200, "UART2", document.querySelector("#receiver-tx-uart2")], [0x0300, "USB", document.querySelector("#receiver-tx-usb")]];
+  let receiverSystemSample = null;
+  let receiverTxSample = null;
   let pendingInterfacePoll = null;
+  let interfaceRxState = { counters: new Map(), name: null };
   let receiverFirmwareTimeout = null;
   const waterfallMinutes = document.querySelector("#waterfall-minutes");
   const waterfallMarkerMinutes = document.querySelector("#waterfall-marker-minutes");
@@ -257,7 +266,7 @@
     positionSourceSelect.title = receiver.value === "x20" ? "Choose which X20 navigation solution drives the live position display." : "The selected F9P provides the primary NAV solution only.";
     positionSourceNote.hidden = receiver.value === "x20";
   }
-  function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
+  function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaudTarget.value = "host"; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
   function resetTraceBuffers() { blockViews.forEach((view) => { view.averageHistory = []; view.peak = null; }); }
   function resetWaterfallHistory() {
     blockViews.forEach((view) => {
@@ -273,6 +282,8 @@
   }
   function resetReplayDerivedViews(removeMaps = true) {
     resetLocalClock();
+    interfaceRxState = { counters: new Map(), name: null }; receiverInterface.textContent = "Interface: --";
+    receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
     resetWaterfallHistory(); positionFixes = []; positionView = null; positionDrag = null; positionEmpty.hidden = false; positionInfo.textContent = "No position data.";
     positionRecenter.disabled = true; positionZoomIn.disabled = true; positionZoomOut.disabled = true;
     if (removeMaps) {
@@ -1689,11 +1700,13 @@
 
   function handleUbx(messageClass, messageId, payload) {
     if (messageClass === 0x0a && messageId === 0x36) {
+      parseMonCommsTx(payload);
       const interfaceName = parseMonCommsInterface(payload);
       if (pendingInterfacePoll) pendingInterfacePoll(interfaceName);
       else if (interfaceName) receiverInterface.textContent = `Interface: ${interfaceName}`;
     }
     if (messageClass === 0x0a && messageId === 0x04) parseMonVer(payload);
+    if (messageClass === 0x0a && messageId === 0x39) parseMonSys(payload);
     if (messageClass === 0x05 && (messageId === 0x01 || messageId === 0x00)) receiveConfigAck(messageId, payload);
     if (messageClass === 0x13 && messageId === 0x60) receiveMgaAck(payload);
     if (messageClass === 0x0a && messageId === 0x31) parseMonSpan(payload);
@@ -1727,7 +1740,7 @@
     if (portBytes < minimumPortBytes) return setDetails(`MON-COMMS port record too short: ${portBytes} bytes`);
     const portNames = new Map([[0x0000, "I2C"], [0x0100, "UART1"], [0x0200, "UART2"], [0x0300, "USB"], [0x0400, "SPI"]]);
     const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-    let activePort = null;
+    const counters = new Map(); const receivingPorts = []; let counterReset = false;
     const portDetails = [];
     for (let index = 0; index < portCount; index++) {
       const offset = headerBytes + index * portBytes;
@@ -1735,11 +1748,51 @@
       const txBytes = data.getUint32(offset + 4, true);
       const rxBytes = data.getUint32(offset + 12, true);
       const name = portNames.get(portId);
-      portDetails.push(`${name || `port 0x${portId.toString(16).padStart(4, "0")}`}: TX ${txBytes}, RX ${rxBytes}`);
-      if (name && txBytes > 0 && rxBytes > 0 && (!activePort || txBytes + rxBytes > activePort.activity)) activePort = { name, activity: txBytes + rxBytes };
+      const previous = interfaceRxState.counters.get(portId);
+      let delta = previous === undefined ? 0 : rxBytes - previous;
+      if (delta < 0) {
+        if (previous >= 0xf0000000 && rxBytes < 0x10000000) delta += 0x100000000;
+        else { delta = 0; counterReset = true; }
+      }
+      counters.set(portId, rxBytes);
+      portDetails.push(`${name || `port 0x${portId.toString(16).padStart(4, "0")}`}: TX ${txBytes}, RX ${rxBytes} (+${delta})`);
+      if (["UART1", "UART2", "USB"].includes(name) && delta > 0) receivingPorts.push(name);
     }
-    receiverInterface.title = `MON-COMMS v${payload[0]}, ${portCount} ports; ${portDetails.join("; ")}`;
-    return activePort?.name || null;
+    interfaceRxState.counters = counters;
+    if (counterReset) interfaceRxState.name = null;
+    else if (receivingPorts.length === 1) interfaceRxState.name = receivingPorts[0];
+    else if (receivingPorts.length > 1) interfaceRxState.name = null;
+    const evidence = counterReset ? "RX counters reset; waiting for another sample" : receivingPorts.length > 1 ? `Ambiguous RX activity on ${receivingPorts.join(", ")}` : interfaceRxState.name ? `Confirmed by RX counter changes: ${interfaceRxState.name}` : "Waiting for RX counter changes";
+    receiverInterface.title = `MON-COMMS v${payload[0]}, ${portCount} ports; ${evidence}; ${portDetails.join("; ")}`;
+    if (receivingPorts.length > 1 || counterReset) receiverInterface.textContent = "Interface: unknown";
+    return interfaceRxState.name;
+  }
+
+  function parseMonCommsTx(payload) {
+    if (payload.length < 8 || payload[0] !== 0 || !payload[1]) return;
+    const portBytes = (payload.length - 8) / payload[1];
+    if (!Number.isInteger(portBytes) || portBytes < 16) return;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const ports = new Map();
+    for (let index = 0; index < payload[1]; index++) {
+      const offset = 8 + index * portBytes; const portId = data.getUint16(offset, true);
+      if (!receiverTxPorts.some(([id]) => id === portId)) continue;
+      ports.set(portId, { pending: data.getUint16(offset + 2, true), usage: payload[offset + 8], peak: payload[offset + 9], bytes: data.getUint32(offset + 4, true), overruns: portBytes >= 20 ? data.getUint16(offset + 18, true) : null, skipped: portBytes >= 40 ? data.getUint32(offset + 36, true) : null });
+    }
+    receiverTxSample = { ports, receivedAt: Date.now() };
+    if (!replayRebuilding) renderReceiverTx();
+  }
+
+  function renderReceiverTx() {
+    const sample = receiverTxSample;
+    const stale = sample && !replayData && Date.now() - sample.receivedAt > 3000;
+    const percent = (value) => value <= 100 ? `${value}%` : "n/a";
+    for (const [id, name, element] of receiverTxPorts) {
+      const port = sample?.ports.get(id);
+      element.textContent = `${name} TX: ${port ? `${percent(port.usage)} (${port.pending} B)` : "--"}${stale && port ? " (stale)" : ""}`;
+      element.title = port ? `${replayData ? "Recorded" : "Receiver"} MON-COMMS: maximum TX buffer occupancy in last monitoring period ${percent(port.usage)}; peak ${percent(port.peak)}; pending ${port.pending} bytes; total transmitted ${port.bytes} bytes${port.overruns !== null ? `; RX overrun timeslots ${port.overruns}` : ""}${port.skipped !== null ? `; skipped bytes ${port.skipped}` : ""}${stale ? "; no update for over 3 seconds" : ""}` : sample ? `${name} is not reported by MON-COMMS` : "Waiting for receiver MON-COMMS telemetry";
+    }
+    renderSystemStatsIndicator();
   }
 
   function parseMonVer(payload) {
@@ -1761,6 +1814,55 @@
     if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout);
     receiverFirmwareTimeout = null;
     return { software, hardware, firmware, model, protocol, extensions };
+  }
+
+  function parseMonSys(payload) {
+    if (payload.length < 24 || payload[0] !== 1) return;
+    receiverSystemSample = { cpu: payload[2], cpuMax: payload[3], memory: payload[4], memoryMax: payload[5], io: payload[6], ioMax: payload[7], receivedAt: Date.now() };
+    if (!replayRebuilding) renderReceiverLoad();
+  }
+
+  function renderReceiverLoad() {
+    const sample = receiverSystemSample;
+    const stale = sample && !replayData && Date.now() - sample.receivedAt > 3000;
+    const percent = (value) => value <= 100 ? `${value}%` : "n/a";
+    for (const [element, label, field, description] of [
+      [receiverCpu, "CPU", "cpu", "Highest realtime task load across receiver CPUs"],
+      [receiverMemory, "MEM", "memory", "Highest dynamic memory usage across receiver CPUs"],
+    ]) {
+      element.textContent = `${label}: ${sample ? percent(sample[field]) : "--"}${stale ? " (stale)" : ""}`;
+      element.title = sample ? `${replayData ? "Recorded" : "Receiver"} MON-SYS: ${description}; peak since restart ${percent(sample[`${field}Max`])}${stale ? "; no update for over 3 seconds" : ""}` : receiver.value === "x20" ? "Waiting for receiver MON-SYS telemetry" : "CPU/memory telemetry requires MON-SYS; not available on standard F9P firmware";
+    }
+    renderSystemStatsIndicator();
+  }
+
+  function systemStatsSeverity(system, tx) {
+    const values = [system?.cpu, system?.memory, ...[...(tx?.ports.values() || [])].map((port) => port.usage)].filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
+    if (!values.length) return { state: "idle", label: "waiting for telemetry" };
+    const maximum = Math.max(...values);
+    const state = maximum > 95 ? "critical" : maximum > 90 ? "warning" : "normal";
+    return { state, label: `${state}, highest usage ${maximum}%` };
+  }
+
+  function renderSystemStatsIndicator() {
+    const severity = systemStatsSeverity(receiverSystemSample, receiverTxSample);
+    const stale = !replayData && [receiverSystemSample, receiverTxSample].some((sample) => sample && Date.now() - sample.receivedAt > 3000);
+    systemStatsButton.dataset.state = severity.state;
+    systemStatsButton.title = `System stats: ${severity.label}${stale ? "; stale telemetry" : ""}${replayData ? "; recorded telemetry" : ""}`;
+    systemStatsButton.setAttribute("aria-label", systemStatsButton.title);
+  }
+
+  function positionSystemStats() {
+    if (!systemStatsPanel.matches(":popover-open")) return;
+    const top = Math.max(16, Math.min(systemStatsButton.getBoundingClientRect().bottom + 8, window.innerHeight - 80));
+    systemStatsPanel.style.top = `${top}px`;
+    systemStatsPanel.style.maxHeight = `${Math.max(48, window.innerHeight - top - 16)}px`;
+  }
+
+  function receiverMonitoringConfigurationRequests(receiverName) {
+    const requests = [["MON-COMMS UART1", 0x20910350, 1, 1]];
+    if (receiverName === "x20") requests.push(["MON-SYS UART1", 0x2091069e, 1, 1]);
+    return requests;
   }
 
   function pollReceiverFirmware() {
@@ -1946,25 +2048,40 @@
     configurationTooltip.innerHTML = `Configuration: ${results.map((item) => `<span class="${resultClass(item.result)}" style="color:${resultColor(item.result)}">${item.name} ${resultLabel(item.result)}</span>`).join(" | ")}`;
   }
   async function detectReceiverInterface() {
+    interfaceRxState = { counters: new Map(), name: null };
     receiverInterface.textContent = "Interface: detecting...";
-    receiverInterface.title = "Polling UBX-MON-COMMS for active RX/TX counters";
+    receiverInterface.title = "Polling UBX-MON-COMMS for changes in RX byte counters";
     const interfaceName = await new Promise((resolve) => {
-      const timeout = setTimeout(() => pendingInterfacePoll?.(null), 1500);
-      pendingInterfacePoll = (name) => { clearTimeout(timeout); pendingInterfacePoll = null; resolve(name); };
-      writer.write(ubxFrame(0x0a, 0x36, new Uint8Array(0))).catch(() => pendingInterfacePoll?.(null));
+      let settled = false;
+      const finish = (name) => {
+        if (settled) return;
+        settled = true; clearTimeout(timeout); clearInterval(interval); pendingInterfacePoll = null; resolve(name);
+      };
+      const poll = () => {
+        if (!writer) { finish(null); return; }
+        writer.write(ubxFrame(0x0a, 0x36, new Uint8Array(0))).catch(() => finish(null));
+      };
+      const timeout = setTimeout(() => finish(null), 2000);
+      const interval = setInterval(poll, 250);
+      pendingInterfacePoll = (name) => { if (name) finish(name); };
+      poll();
     });
-    receiverInterface.textContent = interfaceName ? `Interface: ${interfaceName}` : "Interface: unknown (MON-COMMS reported no active RX/TX port)";
+    receiverInterface.textContent = interfaceName ? `Interface: ${interfaceName}` : "Interface: unknown (no unique RX activity detected)";
     if (!interfaceName && receiverInterface.title.startsWith("Polling")) receiverInterface.title = "No MON-COMMS response received before timeout";
     return interfaceName;
   }
 
   function receiverInterfaceRequests(requests, allInterfaces) {
-    const allReceiverInterfaces = [["I2C", -1, 0x10720000], ["UART1", 0, 0x10740000], ["UART2", 1, 0x10760000], ["USB", 2, 0x10780000], ["SPI", 3, 0x107a0000]];
-    const interfaces = allInterfaces ? allReceiverInterfaces : [allReceiverInterfaces[1]];
-    const protocolRequests = interfaces.flatMap(([name, offset, protocolKey]) => [
-      [`${name} UBX output on`, protocolKey + 1, 1, 1],
+    const serialInterfaces = [["UART1", 0, 0x10740000], ["UART2", 1, 0x10760000], ["USB", 2, 0x10780000]];
+    const interfaces = allInterfaces ? serialInterfaces : [serialInterfaces[0]];
+    const excludedRequests = [["I2C", 0x10720000], ["SPI", 0x107a0000]].flatMap(([name, protocolKey]) => [
+      [`${name} UBX output off`, protocolKey + 1, 0, 1],
       [`${name} NMEA output off`, protocolKey + 2, 0, 1],
     ]);
+    const protocolRequests = excludedRequests.concat(interfaces.flatMap(([name, offset, protocolKey]) => [
+      [`${name} UBX output on`, protocolKey + 1, 1, 1],
+      [`${name} NMEA output off`, protocolKey + 2, 0, 1],
+    ]));
     return protocolRequests.concat(requests.flatMap(([name, key, value, valueBytes]) => {
       if (name === "UART1 NMEA output off") return [];
       if (!name.endsWith(" UART1")) return [[name, key, value, valueBytes]];
@@ -1999,6 +2116,7 @@
         ["RXM-SFRBX UART1", 0x20910232, 1, 1],
         ["NAV-TIMEGAL UART1", 0x20910057, 1, 1],
         ["MON-RF UART1", 0x2091035a, 1, 1],
+        ...receiverMonitoringConfigurationRequests(receiver.value),
       ];
       if (receiver.value === "x20") requests.push(
         ["NAV2 output enabled", 0x10170001, 1, 4],
@@ -2036,18 +2154,26 @@
     settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
   }
 
-  async function applyReceiverBaud(rate) {
+  async function applyReceiverBaud(rate, target = "host") {
+    const key = { UART1: 0x40520001, UART2: 0x40530001 }[target];
+    if (target !== "host" && !key) throw new Error("Unknown baud-rate target");
     if (!port || !writer) {
+      if (key) throw new Error(`Connect a receiver before changing ${target}`);
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
       return "saved";
     }
-    configurationStatus.className = "status-item";
-    configurationStatus.textContent = `Configuration: changing UART1 to ${rate.toLocaleString("en-US").replaceAll(",", " ")}...`;
-    const result = await sendValset("UART1 baud rate", 0x40520001, rate, 4);
-    showConfigResults([{ name: "UART1 baud rate", result }]);
-    if (result !== "ack") throw new Error(`UART1 baud rate change ${result}`);
+    if (!key) {
+      await reconnectAtBaud(rate);
+      setStatus("USB/host port baud setting updated; receiver UART rates unchanged. Native USB throughput is independent of baud.");
+      return "host";
+    }
+    configurationStatus.className = "configuration-light config-pending";
+    configurationTooltip.textContent = `Configuration: changing ${target} baud rate...`;
+    const result = await sendValset(`${target} baud rate`, key, rate, 4);
+    showConfigResults([{ name: `${target} baud rate`, result }]);
+    if (result !== "ack") throw new Error(`${target} baud rate change ${result}`);
     await reconnectAtBaud(rate);
-    setStatus(`Reconnected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}`);
+    setStatus(`${target} and host port set to ${rate.toLocaleString("en-US").replaceAll(",", " ")} baud`);
     return result;
   }
 
@@ -2102,6 +2228,8 @@
     if ((messageClass === 0x01 || messageClass === 0x29) && (messageId === 0x35 || messageId === 0x43)) return "cno";
     if (messageClass === 0x02 && messageId === 0x15) return "rawx";
     if (messageClass === 0x0a && messageId === 0x38) return "monrf";
+    if (messageClass === 0x0a && messageId === 0x39) return "system";
+    if (messageClass === 0x0a && messageId === 0x36) return "comms";
     if (messageClass === 0x01 && messageId === 0x03) return "navstatus";
     if (messageClass === 0x27 && messageId === 0x09) return "secsig";
     if (messageClass === 0x27 && messageId === 0x10) return "secsiglog";
@@ -2128,7 +2256,7 @@
     replaySeekAnimationFrame = null; resetReplayDerivedViews(false);
     let frameEnd = 0;
     while (frameEnd < replayFrames.length && replayFrames[frameEnd].end <= offset) frameEnd += 1;
-    const limits = { span: Math.max(settings.waterfallMinutes * WATERFALL_ROWS_PER_MINUTE, settings.averageFrames), position: 3600, cno: HISTORY_LENGTH * 2, rawx: HISTORY_LENGTH, monrf: 3600, navstatus: 3600, secsig: 3600, secsiglog: 25, osnma: 3600, osnmaStatus: 600 };
+    const limits = { span: Math.max(settings.waterfallMinutes * WATERFALL_ROWS_PER_MINUTE, settings.averageFrames), position: 3600, cno: HISTORY_LENGTH * 2, rawx: HISTORY_LENGTH, monrf: 3600, system: 1, comms: 2, navstatus: 3600, secsig: 3600, secsiglog: 25, osnma: 3600, osnmaStatus: 600 };
     const counts = {}; const selectedFrames = [];
     for (let index = frameEnd - 1; index >= 0; index--) {
       const frame = replayFrames[index]; const count = counts[frame.group] || 0;
@@ -2141,7 +2269,7 @@
     } finally { replayRebuilding = false; }
     blockViews.forEach((view) => draw(view));
     if (positionFixes.length) { drawPositionTrack(); if (!positionPanel.hidden) updatePositionMap(positionFixes[positionFixes.length - 1]); }
-    drawSignals(); renderOsnma();
+    drawSignals(); renderOsnma(); renderReceiverLoad(); renderReceiverTx();
     setStatus(`Replay paused at ${replayData?.length ? Math.round(offset * 100 / replayData.length) : 0}%`);
   }
   function scheduleReplayViewRebuild(offset) {
@@ -2294,12 +2422,13 @@
       await selectedPort.open({ baudRate: rate, bufferSize: 1 << 20 });
       port = selectedPort; writer = port.writable.getWriter(); reading = true;
       resetLocalClock();
+      receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
       connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); pollReceiverFirmware(); await detectReceiverInterface(); await configureMonSpan(); setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
     } catch (error) { setStatus(`Connection failed: ${error.message}`); }
     finally { connectButton.disabled = false; }
   }
-  async function disconnect() { reading = false; resetLocalClock(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
+  async function disconnect() { reading = false; resetLocalClock(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
 
   connectButton.addEventListener("click", () => port ? disconnect() : connect());
   recordButton.addEventListener("click", () => isRecording() ? stopRecording() : startRecording());
@@ -2341,6 +2470,8 @@
   refreshOsnmaClock();
   setInterval(refreshOsnmaIndicators, 1000);
   setInterval(renderHasDiagnostics, 1000);
+  setInterval(renderReceiverLoad, 1000);
+  setInterval(renderReceiverTx, 1000);
   setInterval(refreshOsnmaClock, 100);
   configureButton.addEventListener("click", configureMonSpan);
   osnmaTrustComputerClock.addEventListener("change", updateOsnmaClockSettings);
@@ -2379,6 +2510,14 @@
     drawSignals();
   });
   settingsButton.addEventListener("click", () => { syncSettingsForm(); settingsDialog.showModal(); });
+  systemStatsPanel.addEventListener("toggle", (event) => {
+    systemStatsButton.setAttribute("aria-expanded", String(event.newState === "open"));
+    positionSystemStats();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && systemStatsPanel.matches(":popover-open")) systemStatsPanel.hidePopover();
+  });
+  window.addEventListener("resize", positionSystemStats);
   settingsClose.addEventListener("click", () => settingsDialog.close());
   settingsReset.addEventListener("click", () => { const sourceChanged = settings.positionSource !== DEFAULT_SETTINGS.positionSource; Object.assign(settings, DEFAULT_SETTINGS); syncSettingsForm(); renderOsnma(); renderHasDiagnostics(); if (sourceChanged) resetPositionSourceDisplay(); });
   enableOsnma.addEventListener("change", updateGnssIntegritySettingsForm);
@@ -2397,7 +2536,7 @@
     nextSettings.lastReceiver = receiver.value;
     const mapThemeChanged = nextSettings.darkMap !== settings.darkMap;
     settings = nextSettings; resetTraceBuffers(); if (durationChanged && blockCount) buildBlocks(blockCount); else if (markerIntervalChanged) blockViews.forEach((view) => { view.timestampMarkers = []; view.lastMarkerSlot = null; }); if (mapThemeChanged) updateMapTiles(); saveSettings(); renderOsnma(); renderHasDiagnostics(); refreshLocalClock(); if (positionSourceChanged) resetPositionSourceDisplay();
-    try { if (nextBaud !== currentBaud) await applyReceiverBaud(nextBaud); if ((interfacesChanged || gnssFeaturesChanged) && writer) await configureMonSpan(); settingsDialog.close(); }
+    try { if (nextBaud !== currentBaud || receiverBaudTarget.value !== "host") await applyReceiverBaud(nextBaud, receiverBaudTarget.value); if ((interfacesChanged || gnssFeaturesChanged) && writer) await configureMonSpan(); settingsDialog.close(); }
     catch (error) { setStatus(`Baud change failed: ${error.message}`); }
   });
   navigator.serial?.addEventListener("disconnect", () => { if (port) disconnect(); });
