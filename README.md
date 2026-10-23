@@ -4,7 +4,7 @@ Requires an F9 or X20-series Ublox receiver.
 
 ### Browser app:
 - Serve this directory over localhost, for example: `python -m http.server 8765`
-- Open `insight.html` in Chrome or Edge.
+- Open `index.html` in Chrome or Edge.
 - The page can also be opened directly. In `file://` mode the map automatically
 	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
 - Connect the receiver and select `Start recording` to begin capturing raw bytes.
