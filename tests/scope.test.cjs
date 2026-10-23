@@ -163,6 +163,39 @@ test("canvas PNG export downloads a timestamped PNG and revokes its object URL",
   assert.equal(revokedUrl, "blob:graph");
 });
 
+test("signal PNG export retains readout colors and wraps values within the image", () => {
+  const textRuns = [];
+  let exportCanvas;
+  const drawing = {
+    measureText(text) { return { width: text.length * 6 }; }, fillRect() {}, drawImage() {},
+    fillText(text, x, y) { textRuns.push({ text, x, y, color: this.fillStyle }); },
+  };
+  const readout = { childNodes: [
+    { nodeType: 3, textContent: "Epoch 5 | 2026-10-23 12:00:00.000 UTC | " },
+    { nodeType: 1, textContent: "RF 1: 1234.0", style: { color: "#44ccff" } },
+    { nodeType: 3, textContent: " | " },
+    { nodeType: 1, textContent: "RF 2: 2345.0", style: { color: "#88eeff" } },
+    { nodeType: 3, textContent: " | " },
+    { nodeType: 1, textContent: "PGA: 25.0", style: { color: "#ff66cc" } },
+  ] };
+  const canvas = { width: 240, height: 200, closest: () => ({ querySelector: () => readout }) };
+  const context = loadFunctions(["downloadCanvasPng", "signalExportReadout"], {
+    window: { devicePixelRatio: 1 }, signalHover: new Map([[canvas, 5]]),
+    document: { createElement() { exportCanvas = { getContext: () => drawing, toBlob() {} }; return exportCanvas; } },
+  });
+  context.downloadCanvasPng(canvas, "AGC", () => context.signalExportReadout(canvas));
+  assert.ok(exportCanvas.height > canvas.height + 44);
+  const footer = textRuns.slice(1);
+  assert.equal(footer.map((run) => run.text).join(""), "Cursor: " + readout.childNodes.map((node) => node.textContent).join(""));
+  for (const color of ["#44ccff", "#88eeff", "#ff66cc"]) assert.ok(footer.some((run) => run.color === color));
+  assert.ok(footer.every((run) => run.x >= 12 && run.x + drawing.measureText(run.text).width <= 228));
+  assert.ok(footer.every((run) => run.y + 11 <= exportCanvas.height));
+  context.signalHover.clear();
+  assert.equal(context.signalExportReadout(canvas).length, 0);
+  context.downloadCanvasPng(canvas, "AGC", () => context.signalExportReadout(canvas));
+  assert.equal(exportCanvas.height, canvas.height + 30);
+});
+
 test("RXM-RAWX decodes Doppler per signal and draws successive measurements", () => {
   let segments = 0;
   let redraws = 0;
@@ -170,8 +203,8 @@ test("RXM-RAWX decodes Doppler per signal and draws successive measurements", ()
     get(target, property) { return target[property] ?? (() => {}); },
   });
   const canvas = { getContext: () => drawing };
-  const context = loadFunctions(["appendHistory", "appendSeries", "parseRawx", "drawSignalChart"], {
-    DataView, Number, signalEpoch: { doppler: 0 }, signalHistory: { doppler: new Map() },
+  const context = loadFunctions(["appendHistory", "appendSeries", "parseRawx", "drawSignalChart", "signalSampleEpoch"], {
+    DataView, Number, signalEpoch: { latest: null, tow: null }, signalHistory: { doppler: new Map() },
     signalsEmpty: { hidden: false }, replayRebuilding: false, gnssColor: () => "#ffffff",
     drawSignals() { redraws += 1; }, HISTORY_LENGTH: 600,
     sizeCanvas: () => ({ width: 800, height: 400 }), window: { devicePixelRatio: 1 },
@@ -189,6 +222,7 @@ test("RXM-RAWX decodes Doppler per signal and draws successive measurements", ()
     data.setFloat32(offset + 16, -1234.5 - index * 100, true);
   }
   context.parseRawx(payload);
+  data.setFloat64(0, 1, true);
   data.setFloat32(32, -1230.25, true);
   context.parseRawx(payload);
   const histories = context.signalHistory.doppler;
@@ -201,6 +235,91 @@ test("RXM-RAWX decodes Doppler per signal and draws successive measurements", ()
   context.drawSignalChart(canvas, [...histories.values()], {});
   assert.equal(context.signalChartState.get(canvas).lastEpoch, 2);
   assert.equal(segments, 7);
+});
+
+test("shared signal epochs preserve missing seconds, duplicates, late arrival and GPS week rollover", () => {
+  const context = loadFunctions(["signalSampleEpoch"], { signalEpoch: { latest: null, tow: null } });
+  assert.equal(context.signalSampleEpoch(), 1);
+  assert.equal(context.signalSampleEpoch(604798000), 1);
+  assert.equal(context.signalSampleEpoch(604798000), 1);
+  assert.equal(context.signalSampleEpoch(1000), 4);
+  assert.equal(context.signalSampleEpoch(), 4);
+  assert.equal(context.signalSampleEpoch(604799000), 2);
+  assert.equal(context.signalEpoch.latest, 4);
+  assert.equal(context.signalSampleEpoch(2000), 5);
+  assert.equal(context.signalSampleEpoch(NaN), 5);
+});
+
+test("all signal chart windows advance together despite missing reports and constellation filtering", () => {
+  const charts = [];
+  const context = loadFunctions(["drawSignals"], {
+    signalEpoch: { latest: 20, tow: 19000 }, activeConstellations: new Set([0]), BAND_MARKERS: [],
+    signalHistory: { cno: new Map([["0:1", { values: [{ epoch: 18, value: 42 }] }]]), doppler: new Map([["2:1:0", { values: [{ epoch: 1, value: -100 }] }]]), jamState: [], jamIndex: [], agc: [], pga: [], spoof: [], secJam: [], secSpoof: [], secFrequency: [] },
+    signalCharts: { cno: "cno", doppler: "doppler", jamState: "jamState", jamIndex: "jamIndex", agc: "agc", spoof: "spoof", secState: "secState", secFrequency: "secFrequency" },
+    drawSignalChart(canvas, series, options) { charts.push({ canvas, series, options }); }, renderGnssThreatSummary() {},
+    renderSignalReadout() {},
+  });
+  context.drawSignals();
+  assert.equal(charts.length, 8);
+  assert.ok(charts.every((chart) => chart.options.lastEpoch === 20));
+  assert.equal(charts.find((chart) => chart.canvas === "doppler").series.length, 0);
+});
+
+test("NAV epochs advance every graph even when C/N0 and RAWX reports are missing", () => {
+  let redraws = 0;
+  const context = loadFunctions(["handleUbx", "parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "parseRawx", "parseMonRf", "parseNavStatus", "parseSecSig", "signalSampleEpoch", "recordSignalUtc", "recordSignalComputerTime", "appendHistory", "appendSeries"], {
+    signalEpoch: { latest: null, tow: null }, replayRebuilding: false, HISTORY_LENGTH: 600,
+    replayData: null,
+    satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
+    signalHistory: { cno: new Map(), doppler: new Map(), jamState: [], jamIndex: [], agc: [], pga: [], spoof: [], secJam: [], secSpoof: [], secFrequency: [] },
+    receiverThreat: {}, signalsEmpty: {}, secSecuritySummary: {}, secSigFramesReceived: 0, secSigRawFramesReceived: 0,
+    renderSatellites() {}, renderHasDiagnostics() {}, gnssColor() {}, parseNavPvt() {}, drawSignals() { redraws++; },
+  });
+  const sat = new Uint8Array(20); sat[4] = 1; sat[5] = 1; sat[9] = 1; sat[10] = 42;
+  const raw = new Uint8Array(48); raw[11] = 1; raw[37] = 1;
+  const pvt = new Uint8Array(92);
+  const rf = new Uint8Array(28); rf[1] = 1;
+  const sec = new Uint8Array([2, 0, 0, 0]);
+  context.handleUbx(1, 0x35, sat);
+  context.handleUbx(2, 0x15, raw);
+  context.handleUbx(0x0a, 0x38, rf);
+  context.handleUbx(0x27, 9, sec);
+  new DataView(pvt.buffer).setUint32(0, 3000, true);
+  const previousRedraws = redraws;
+  context.handleUbx(1, 7, pvt);
+  assert.equal(context.signalEpoch.latest, 4);
+  assert.ok(redraws > previousRedraws);
+  context.handleUbx(0x0a, 0x38, rf);
+  context.handleUbx(0x27, 9, sec);
+  assert.deepEqual(Array.from(context.signalHistory.jamState[0], (sample) => sample.epoch), [1, 4]);
+  assert.deepEqual(Array.from(context.signalHistory.secJam, (sample) => sample.epoch), [1, 4]);
+  assert.equal(context.signalHistory.pga.length, 0);
+  assert.equal(context.signalHistory.cno.get("0:1").values.length, 1);
+  new DataView(raw.buffer).setFloat64(0, 3, true);
+  context.handleUbx(2, 0x15, raw);
+  assert.deepEqual(Array.from(context.signalHistory.doppler.get("0:1:0").values, (sample) => sample.epoch), [1, 4]);
+  new DataView(sat.buffer).setUint32(0, 1000, true);
+  context.handleUbx(1, 0x35, sat);
+  assert.equal(context.signalEpoch.latest, 4);
+  assert.equal(context.signalHistory.cno.get("0:1").values.at(-1).epoch, 2);
+});
+
+test("signal charts retain a shared empty window and break lines across missing epochs", () => {
+  const connections = [];
+  const drawing = new Proxy({ lineTo(x, y) { connections.push([x, y]); } }, { get(target, property) { return target[property] ?? (() => {}); } });
+  const canvas = { getContext: () => drawing };
+  const context = loadFunctions(["drawSignalChart"], {
+    sizeCanvas: () => ({ width: 800, height: 400 }), window: { devicePixelRatio: 1 },
+    HISTORY_LENGTH: 600, signalChartState: new Map(), signalHover: new Map(),
+  });
+  context.drawSignalChart(canvas, [{ values: [{ epoch: 1, value: 42 }, { epoch: 3, value: 43 }, { epoch: 4, value: 44 }] }], { lastEpoch: 10 });
+  assert.equal(connections.length, 6);
+  assert.equal(context.signalChartState.get(canvas).lastEpoch, 10);
+  assert.equal(context.signalChartState.get(canvas).firstEpoch, -589);
+  context.drawSignalChart(canvas, [], { lastEpoch: 11 });
+  assert.equal(context.signalChartState.get(canvas).lastEpoch, 11);
+  context.drawSignalChart(canvas, [{ values: [{ epoch: 1, value: 99999 }] }], { lastEpoch: 700 });
+  assert.equal(context.signalChartState.get(canvas).firstEpoch, 101);
 });
 
 test("signal charts handle accumulated multi-satellite histories without argument overflow", () => {
@@ -251,11 +370,11 @@ test("signal chart keeps empty frequency epochs on the timeline without plotting
 });
 
 test("empty SEC-SIG frequency frames retain their epoch and detection state", () => {
-  const context = loadFunctions(["parseSecSig"], {
+  const context = loadFunctions(["parseSecSig", "signalSampleEpoch"], {
     secSigRawFramesReceived: 0, secSigFramesReceived: 0,
     secSecuritySummary: { innerHTML: "" }, signalsEmpty: { hidden: true }, replayRebuilding: false,
     receiverThreat: { secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null },
-    signalEpoch: { sec: 0 }, signalHistory: { secJam: [], secSpoof: [], secFrequency: [] },
+    signalEpoch: { latest: null, tow: null }, signalHistory: { secJam: [], secSpoof: [], secFrequency: [] },
     appendHistory(history, sample) { history.push(sample); }, drawSignals() {},
   });
   const payload = new Uint8Array([2, 0b00101011, 0, 0]);
@@ -266,12 +385,194 @@ test("empty SEC-SIG frequency frames retain their epoch and detection state", ()
   assert.equal(context.receiverThreat.secSpoofEnabled, true);
 });
 
+test("computer marker timestamps are independent of receiver time and app corrections", () => {
+  let now = Date.UTC(2026, 9, 23, 12, 0, 0);
+  const Clock = class extends Date { static now() { return now; } };
+  const context = loadFunctions(["recordSignalComputerTime", "signalEpochTime", "signalSampleEpoch", "formatSignalTimestamp"], {
+    Date: Clock, signalEpoch: { latest: null, tow: null }, HISTORY_LENGTH: 600,
+    signalMarkerLocalTime: { checked: false },
+    replayData: null, replayRebuilding: false, signalMarkerTimeSource: { value: "computer" }, appClockOffsetMs: 86400000,
+  });
+  const first = context.signalSampleEpoch(100000);
+  context.recordSignalComputerTime(first);
+  assert.equal(context.signalEpochTime(first), "Computer RX 2026-10-23 12:00:00.000 UTC");
+  now += 1000;
+  context.recordSignalComputerTime(first);
+  assert.equal(context.signalEpochTime(first), "Computer RX 2026-10-23 12:00:00.000 UTC");
+  const jumped = context.signalSampleEpoch(200000);
+  context.recordSignalComputerTime(jumped);
+  context.signalEpoch.clocks = new Map([[jumped, Date.UTC(2099, 0, 1)]]);
+  assert.equal(context.signalEpochTime(jumped), "Computer RX 2026-10-23 12:00:01.000 UTC");
+  assert.equal(context.signalEpochTime(jumped - 1), "Computer reception time unavailable");
+  context.signalMarkerTimeSource.value = "receiver";
+  assert.equal(context.signalEpochTime(jumped), "Receiver 2099-01-01 00:00:00.000 UTC");
+  context.signalMarkerTimeSource.value = "computer";
+  assert.equal(context.signalEpochTime(jumped), "Computer RX 2026-10-23 12:00:01.000 UTC");
+});
+
+test("computer marker time never stamps replay with the current clock and stays bounded live", () => {
+  const context = loadFunctions(["recordSignalComputerTime", "signalEpochTime", "formatSignalTimestamp"], {
+    signalEpoch: { latest: 1, tow: 0 }, HISTORY_LENGTH: 600, replayData: new Uint8Array(1), replayRebuilding: false,
+    signalMarkerLocalTime: { checked: false },
+    signalMarkerTimeSource: { value: "computer" },
+  });
+  context.recordSignalComputerTime(1);
+  assert.equal(context.signalEpoch.computerClocks, undefined);
+  assert.equal(context.signalEpochTime(1), "Computer capture time unavailable (replay)");
+  context.replayData = null;
+  context.replayRebuilding = true;
+  context.recordSignalComputerTime(1);
+  assert.equal(context.signalEpoch.computerClocks, undefined);
+  context.replayRebuilding = false;
+  for (let epoch = 1; epoch <= 601; epoch++) {
+    context.signalEpoch.latest = epoch;
+    context.recordSignalComputerTime(epoch);
+  }
+  assert.equal(context.signalEpoch.computerClocks.size, 600);
+  assert.equal(context.signalEpoch.computerClocks.has(1), false);
+  context.signalEpoch = { latest: null, tow: null };
+  assert.equal(context.signalEpochTime(1), "Time unavailable");
+});
+
+test("signal marker local-time checkbox formats both clock sources without changing timestamps", () => {
+  const timestamp = Date.UTC(2026, 9, 23, 2, 0, 0, 123);
+  const localTime = { checked: false };
+  const context = loadFunctions(["signalEpochTime", "formatSignalTimestamp"], {
+    signalEpoch: { latest: 5, tow: 100000, computerClocks: new Map([[5, timestamp]]), clocks: new Map([[5, timestamp]]) },
+    signalMarkerTimeSource: { value: "computer" }, signalMarkerLocalTime: localTime, replayData: null,
+    Intl: { DateTimeFormat: function(locale, options) { return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "America/New_York" }); } },
+  });
+  assert.equal(context.signalEpochTime(5), "Computer RX 2026-10-23 02:00:00.123 UTC");
+  assert.equal(context.signalEpochTime(5.02), "Computer RX 2026-10-23 02:00:00.123 UTC");
+  localTime.checked = true;
+  assert.match(context.signalEpochTime(5), /Computer RX.*22\/10\/2026.*22:00:00.123.*\(local\)/);
+  context.signalMarkerTimeSource.value = "receiver";
+  assert.match(context.signalEpochTime(5), /Receiver.*22\/10\/2026.*22:00:00.123.*\(local\)/);
+  assert.equal(context.signalEpoch.computerClocks.get(5), timestamp);
+  assert.equal(context.signalEpoch.clocks.get(5), timestamp);
+  assert.match(context.formatSignalTimestamp(Date.UTC(2026, 0, 23, 12)), /07:00:00.000.*\(local\)/);
+  localTime.checked = false;
+  assert.equal(context.signalEpochTime(5), "Receiver 2026-10-23 02:00:00.123 UTC");
+});
+
+test("signal marker time uses GPS TOW until valid receiver UTC is available", () => {
+  const context = loadFunctions(["signalSampleEpoch", "recordSignalUtc", "signalEpochTime", "formatSignalTimestamp"], {
+    signalEpoch: { latest: null, tow: null }, HISTORY_LENGTH: 600,
+    signalMarkerLocalTime: { checked: false },
+    signalMarkerTimeSource: { value: "receiver" },
+  });
+  assert.equal(context.signalEpochTime(1), "Time unavailable");
+  context.signalSampleEpoch(604799000);
+  context.signalSampleEpoch(1000);
+  assert.equal(context.signalEpochTime(1), "GPS TOW 604799.000 s");
+  assert.equal(context.signalEpochTime(3), "GPS TOW 1.000 s");
+  const payload = new Uint8Array(92); const data = new DataView(payload.buffer);
+  data.setUint32(0, 1000, true); data.setUint16(4, 2026, true);
+  payload[6] = 10; payload[7] = 24;
+  context.recordSignalUtc(payload, 7);
+  assert.equal(context.signalEpochTime(3), "GPS TOW 1.000 s");
+  payload[11] = 3; data.setInt32(16, -250000000, true);
+  context.recordSignalUtc(payload, 7);
+  assert.equal(context.signalEpochTime(3), "Receiver 2026-10-23 23:59:59.750 UTC");
+  assert.equal(context.signalEpochTime(2), "Receiver 2026-10-23 23:59:58.750 UTC (estimated)");
+  payload[6] = 13;
+  context.recordSignalUtc(payload, 7);
+  assert.equal(context.signalEpochTime(3), "Receiver 2026-10-23 23:59:59.750 UTC");
+  assert.equal(context.signalEpochTime(0), "Time unavailable");
+});
+
+test("signal UTC history preserves clock changes, handles TIMEUTC and stays bounded", () => {
+  const context = loadFunctions(["signalSampleEpoch", "recordSignalUtc", "signalEpochTime", "formatSignalTimestamp"], {
+    signalEpoch: { latest: null, tow: null }, HISTORY_LENGTH: 600,
+    signalMarkerLocalTime: { checked: false },
+    signalMarkerTimeSource: { value: "receiver" },
+  });
+  const payload = new Uint8Array(20); const data = new DataView(payload.buffer);
+  data.setUint16(12, 2026, true); payload[14] = 10; payload[15] = 23; payload[16] = 12;
+  payload[19] = 4;
+  context.recordSignalUtc(payload, 0x21);
+  assert.equal(context.signalEpochTime(1), "Time unavailable");
+  payload[19] = 7;
+  context.recordSignalUtc(payload, 0x21);
+  data.setUint32(0, 1000, true); payload[18] = 10;
+  context.recordSignalUtc(payload, 0x21);
+  assert.equal(context.signalEpochTime(1), "Receiver 2026-10-23 12:00:00.000 UTC");
+  assert.equal(context.signalEpochTime(2), "Receiver 2026-10-23 12:00:10.000 UTC");
+  for (let index = 2; index <= 601; index++) {
+    data.setUint32(0, index * 1000, true);
+    context.recordSignalUtc(payload, 0x21);
+  }
+  assert.equal(context.signalEpoch.clocks.size, 600);
+  assert.equal(context.signalEpoch.clocks.has(1), false);
+  context.signalEpoch = { latest: null, tow: null };
+  assert.equal(context.signalEpochTime(1), "Time unavailable");
+});
+
+test("signal markers synchronize hover, pin and clear across empty and populated charts", () => {
+  const chart = () => {
+    const readout = { innerHTML: "", textContent: "" };
+    return { readout, getBoundingClientRect: () => ({ left: 0 }), closest: () => ({ querySelector: () => readout }) };
+  };
+  const cno = chart(); const jam = chart(); const empty = chart();
+  const state = (series) => ({ series, box: { x: 0, width: 100 }, firstEpoch: 0, lastEpoch: 10 });
+  const context = loadFunctions(["updateSignalHover", "clearSignalHover", "renderSignalReadout"], {
+    signalCharts: { cno, jam, empty }, signalHover: new Map(), signalHoverPinned: new Set(),
+    signalChartState: new Map([[cno, state([{ label: "0:1", values: [{ epoch: 5, value: 42 }] }])], [jam, state([{ label: "Jamming", color: "red", values: [{ epoch: 5, value: 1 }] }])], [empty, state([])]]),
+    signalEpochTime: () => "2026-10-23 12:00:05.000 UTC", window: { devicePixelRatio: 1 }, drawSignals() {},
+  });
+  assert.equal(context.updateSignalHover(cno, { clientX: 50 }), true);
+  for (const canvas of [cno, jam, empty]) {
+    assert.equal(context.signalHover.get(canvas), 5);
+    assert.match(canvas.readout.innerHTML, /Epoch 5.*2026-10-23 12:00:05.000 UTC/);
+  }
+  assert.doesNotMatch(cno.readout.innerHTML, /0:1/);
+  assert.match(jam.readout.innerHTML, /Jamming: 1.0/);
+  context.updateSignalHover(empty, { clientX: 60 }, true);
+  assert.equal(context.signalHoverPinned.size, 3);
+  assert.equal(context.updateSignalHover(jam, { clientX: 90 }), false);
+  assert.equal(context.signalHover.get(cno), 6);
+  assert.match(jam.readout.innerHTML, /Jamming: n\/a/);
+  context.clearSignalHover(jam);
+  assert.equal(context.signalHover.size, 0);
+  assert.equal(context.signalHoverPinned.size, 0);
+  for (const canvas of [cno, jam, empty]) assert.match(canvas.readout.textContent, /Move cursor/);
+});
+
+test("signal cursor snaps to fractional samples and matches small timing offsets without filling gaps", () => {
+  const chart = () => {
+    const readout = { innerHTML: "", textContent: "" };
+    return { readout, getBoundingClientRect: () => ({ left: 0 }), closest: () => ({ querySelector: () => readout }) };
+  };
+  const jam = chart(); const agc = chart(); const frequency = chart();
+  const state = (label, values) => ({ series: [{ label, color: "red", values }], box: { x: 0, width: 900 }, firstEpoch: 1, lastEpoch: 10 });
+  const context = loadFunctions(["updateSignalHover", "renderSignalReadout"], {
+    signalCharts: { jam, agc, frequency }, signalHover: new Map(), signalHoverPinned: new Set(),
+    signalChartState: new Map([
+      [jam, state("RF 1", [{ epoch: 5.25, value: 2 }, { epoch: 7.25, value: 3 }])],
+      [agc, state("RF 1", [{ epoch: 5.27, value: 1234 }, { epoch: 7.27, value: 2345 }])],
+      [frequency, state("Frequency", [{ epoch: 5.25, value: 1575420000 }, { epoch: 5.25, value: 1227600000 }])],
+    ]),
+    signalEpochTime: () => "test time", window: { devicePixelRatio: 1 }, drawSignals() {},
+  });
+  context.updateSignalHover(jam, { clientX: 425 });
+  assert.equal(context.signalHover.get(jam), 5.25);
+  assert.equal(context.signalHover.get(agc), 5.25);
+  assert.match(jam.readout.innerHTML, /RF 1: 2.0/);
+  assert.match(agc.readout.innerHTML, /RF 1: 1234.0/);
+  assert.match(frequency.readout.innerHTML, /1575420000.0, 1227600000.0/);
+  context.updateSignalHover(jam, { clientX: 525 });
+  assert.match(jam.readout.innerHTML, /RF 1: n\/a/);
+  assert.match(agc.readout.innerHTML, /RF 1: n\/a/);
+  assert.match(frequency.readout.innerHTML, /Frequency: n\/a/);
+});
+
 test("signal hover reports an empty frequency epoch as unavailable", () => {
   const readout = { innerHTML: "" };
   const canvas = { getBoundingClientRect: () => ({ left: 0 }), closest: () => ({ querySelector: () => readout }) };
-  const context = loadFunctions(["updateSignalHover"], {
+  const context = loadFunctions(["updateSignalHover", "renderSignalReadout"], {
     signalChartState: new Map([[canvas, { series: [{ label: "Jammed frequency", color: "red", values: [{ epoch: 2, value: null }] }], box: { x: 0, width: 100 }, firstEpoch: 1, lastEpoch: 2 }]]),
     signalHover: new Map(), signalHoverPinned: new Set(), window: { devicePixelRatio: 1 }, drawSignals() {},
+    signalCharts: { secFrequency: canvas }, signalEpochTime: () => "GPS TOW 2.000 s",
   });
   context.updateSignalHover(canvas, { clientX: 100 });
   assert.match(readout.innerHTML, /Jammed frequency: n\/a/);
@@ -659,10 +960,28 @@ test("satellite filters and numeric sorting keep unknown positions last", () => 
   assert.equal(context.selectedSatellites(report, all, { key: "id", direction: 1 }, false).length, 3);
 });
 
+test("satellite correction sorting follows displayed text in both directions with stable identity ties", () => {
+  const context = loadFunctions(["selectedSatellites", "satelliteCorrectionText"], {});
+  const report = { satellites: [
+    { gnssId: 2, svId: 9, correctionSources: ["RTCM"], correctionTypes: ["Pseudorange"], used: true },
+    { gnssId: 0, svId: 4 },
+    { gnssId: 2, svId: 3, correctionSources: ["HAS"], correctionTypes: ["Pseudorange"], used: true },
+    { gnssId: 0, svId: 2, correctionSources: ["HAS"], correctionTypes: ["Pseudorange"], used: true },
+    { gnssId: 0, svId: 5, diffCorr: true },
+  ] };
+  const all = new Set([0, 2]);
+  const ids = (direction, constellations = all, usedOnly = false) => Array.from(context.selectedSatellites(report, constellations, { key: "corrections", direction }, usedOnly), (satellite) => satellite.svId);
+  assert.deepEqual(ids(1), [2, 3, 4, 5, 9]);
+  assert.deepEqual(ids(-1), [9, 5, 4, 2, 3]);
+  assert.deepEqual(ids(1, new Set([2])), [3, 9]);
+  assert.deepEqual(ids(1, all, true), [2, 3, 9]);
+  assert.deepEqual(report.satellites.map((satellite) => satellite.svId), [9, 4, 3, 2, 5]);
+});
+
 test("satellite C/N0 history accepts only NAV-SAT while preserving NAV2 reports", () => {
-  const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "appendSeries", "appendHistory"], {
+  const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "appendSeries", "appendHistory", "signalSampleEpoch"], {
     satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
-    signalEpoch: { cno: 0 }, signalHistory: { cno: new Map() }, replayRebuilding: false, HISTORY_LENGTH: 600,
+    signalEpoch: { latest: null, tow: null }, signalHistory: { cno: new Map() }, replayRebuilding: false, HISTORY_LENGTH: 600,
     signalsEmpty: {}, renderSatellites() {}, renderHasDiagnostics() {}, drawSignals() {}, gnssColor() {},
   });
   const payload = new Uint8Array(20); payload[4] = 1; payload[5] = 1; payload[8] = 2; payload[9] = 12; payload[10] = 42;
@@ -670,26 +989,27 @@ test("satellite C/N0 history accepts only NAV-SAT while preserving NAV2 reports"
   context.parseNavSat(payload, "NAV");
   payload[10] = 35;
   context.parseNavSat(payload, "NAV2");
-  assert.equal(context.signalEpoch.cno, 1);
+  assert.equal(context.signalEpoch.latest, 1);
   assert.equal(context.signalHistory.cno.size, 1);
   assert.equal(context.signalHistory.cno.get("2:12").values.length, 1);
   assert.equal(context.signalHistory.cno.get("2:12").values[0].value, 42);
   assert.equal(context.satelliteReports.NAV2.satellites[0].cno, 35);
   assert.equal(context.hasCorrectionReports.NAV2.galileo, 1);
   payload[10] = 43;
+  new DataView(payload.buffer).setUint32(0, 1000, true);
   context.parseNavSat(payload, "NAV");
-  assert.equal(context.signalEpoch.cno, 2);
+  assert.equal(context.signalEpoch.latest, 2);
   assert.equal(context.signalHistory.cno.get("2:12").values[1].value, 43);
   payload[4] = 2;
   context.parseNavSat(payload, "NAV");
-  assert.equal(context.signalEpoch.cno, 2);
+  assert.equal(context.signalEpoch.latest, 2);
   assert.doesNotMatch(source, /parseNavSig\(/);
 });
 
 test("NAV-SAT snapshots remain separate for each solution and empty reports clear old satellites", () => {
-  const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "resetSatelliteReports"], {
+  const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "resetSatelliteReports", "signalSampleEpoch"], {
     satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
-    signalEpoch: { cno: 0 }, signalHistory: { cno: new Map() }, replayRebuilding: false,
+    signalEpoch: { latest: null, tow: null }, signalHistory: { cno: new Map() }, replayRebuilding: false,
     signalsEmpty: {}, renderSatellites() {}, renderHasDiagnostics() {}, drawSignals() {}, appendSeries() {}, gnssColor() {},
   });
   const payload = new Uint8Array(20); payload[4] = 1; payload[5] = 1; payload[8] = 2; payload[9] = 12;
@@ -967,8 +1287,10 @@ test("receiver configuration enables NAV-DOP and X20 NAV2-DOP at one epoch per r
 
 test("DOP values are scaled and paired by epoch and source regardless of arrival order", () => {
   const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
-  const context = loadFunctions(["recordPositionSolution", "parseNavDop", "resetPositionComparison", "handleUbx", "replayFrameGroup"], {
+  const context = loadFunctions(["recordPositionSolution", "parseNavDop", "resetPositionComparison", "handleUbx", "replayFrameGroup", "signalSampleEpoch", "recordSignalComputerTime"], {
     positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {},
+    signalEpoch: { latest: null, tow: null }, drawSignals() {},
+    replayData: null, HISTORY_LENGTH: 600,
   });
   const pvt = (tow, pDop) => {
     const payload = new Uint8Array(92); const data = new DataView(payload.buffer);
@@ -1594,9 +1916,10 @@ test("signal chart cursor stays at its clicked epoch until cleared", () => {
   const series = [{ label: "Jamming", color: "red", values: [{ epoch: 4, value: 1 }, { epoch: 5, value: 2 }, { epoch: 6, value: 3 }] }];
   const signalHover = new Map();
   const signalHoverPinned = new Set();
-  const context = loadFunctions(["updateSignalHover", "clearSignalHover"], {
+  const context = loadFunctions(["updateSignalHover", "clearSignalHover", "renderSignalReadout"], {
     signalChartState: new Map([[canvas, { series, box: { x: 0, width: 100 }, firstEpoch: 0, lastEpoch: 10 }]]),
     signalHover, signalHoverPinned, window: { devicePixelRatio: 1 }, drawSignals() {},
+    signalCharts: { secState: canvas }, signalEpochTime: () => "GPS TOW 5.000 s",
   });
   assert.equal(context.updateSignalHover(canvas, { clientX: 50 }, true), true);
   signalHoverPinned.add(canvas);

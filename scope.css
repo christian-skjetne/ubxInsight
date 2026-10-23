@@ -147,6 +147,9 @@ canvas { display: block; width: 100%; background: #090c12; }
 .osnma-disabled-banner { margin: 0 0 12px; padding: 10px 12px; border: 1px solid #d7a845; border-radius: 4px; color: #ffd37a; background: #282315; font-size: 13px; line-height: 1.45; }
 body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { background-color: #40587e99; }
 #signal-plots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.signal-time-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin-bottom: 12px; }
+.signal-time-controls label { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.signal-time-controls input[type="checkbox"] { width: 14px; height: 14px; accent-color: #59c3c3; }
 #constellation-filter { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
 #constellation-filter legend { padding: 0 6px; color: var(--muted); }
 .constellation { display: inline-flex; align-items: center; gap: 5px; color: var(--constellation-color); cursor: pointer; }

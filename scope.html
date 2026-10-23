@@ -96,7 +96,7 @@
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="azimuth" title="Sort by azimuth (degrees)"><span class="satellite-sort-full">Azimuth</span><abbr class="satellite-sort-short" title="Azimuth (degrees)">Az.</abbr><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="used" title="Sort by solution use"><span>Use</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="health" title="Sort by health"><span>Health</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
-          <th scope="col">Corrections</th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="corrections" title="Sort by corrections"><span>Corrections</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
         </tr></thead><tbody id="satellite-rows"><tr><td colspan="7">Waiting for satellite data.</td></tr></tbody></table></div></section>
       </div>
     </section>
@@ -117,6 +117,7 @@
         </div>
         <p class="has-diagnostics-note">Counts reflect receiver-reported per-satellite HAS correction use for GPS and Galileo; they are not an independent signal-authenticity check.</p>
       </section>
+      <div class="signal-time-controls"><label>Marker time <select id="signal-marker-time-source" title="Computer reception time uses the operating system clock; NTP synchronization is managed by the operating system. Raw UBX replay has no computer capture timestamps."><option value="computer">Computer (NTP/local)</option><option value="receiver">Receiver (GNSS)</option></select></label><label><input id="signal-marker-local-time" type="checkbox" checked> Local time</label></div>
       <fieldset id="constellation-filter">
         <legend>Constellations</legend>
         <label class="constellation gps"><input type="checkbox" value="0" checked> GPS</label>

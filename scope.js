@@ -107,6 +107,8 @@
   const positionComparisonQuality = document.querySelector("#position-comparison-quality");
   const positionComparisonState = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
   const signalsPanel = document.querySelector("#signals-panel");
+  const signalMarkerTimeSource = document.querySelector("#signal-marker-time-source");
+  const signalMarkerLocalTime = document.querySelector("#signal-marker-local-time");
   const osnmaPanel = document.querySelector("#osnma-panel");
   const osnmaInputStatus = document.querySelector("#osnma-input-status");
   const osnmaTimeStatus = document.querySelector("#osnma-time-status");
@@ -237,8 +239,7 @@
   const secEvents = [];
   let secSigFramesReceived = 0;
   let secSigRawFramesReceived = 0;
-  const latestPga = [];
-  let signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 };
+  let signalEpoch = { latest: null, tow: null };
   const activeConstellations = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
   const signalHover = new WeakMap();
   const signalHoverPinned = new WeakSet();
@@ -326,13 +327,13 @@
     }
     for (const history of Object.values(signalHistory)) history instanceof Map ? history.clear() : history.length = 0;
     hasCorrectionReports.NAV = null; hasCorrectionReports.NAV2 = null; renderHasDiagnostics();
-    secEvents.length = 0; latestPga.length = 0; secSigFramesReceived = 0; secSigRawFramesReceived = 0;
+    secEvents.length = 0; secSigFramesReceived = 0; secSigRawFramesReceived = 0;
     osnmaFrames.clear(); osnmaE1bFrameCount = 0; osnmaGalileoTime = null; latestOsnmaStatus = null; latestOsnmaTimeCheck = null; osnmaSatelliteResults.clear(); Object.keys(retainedOsnmaCodes).forEach((key) => { retainedOsnmaCodes[key] = null; }); osnmaTrustStatus.textContent = "Not loaded"; osnmaAuthStatus.textContent = "Not verified"; renderOsnma();
-    signalEpoch = { cno: 0, doppler: 0, monRf: 0, pga: 0, spoof: 0, sec: 0 }; Object.assign(receiverThreat, { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null });
+    signalEpoch = { latest: null, tow: null }; Object.assign(receiverThreat, { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null });
     signalsEmpty.hidden = false; secSecuritySummary.innerHTML = "<strong>SEC-SIG:</strong> awaiting X20 security data."; secEventLog.innerHTML = "<strong>SEC-SIGLOG:</strong> no events.";
     Object.values(signalCharts).forEach((canvas) => {
       signalHover.delete(canvas); signalHoverPinned.delete(canvas);
-      if (!inspectionDisabledCharts.has(canvas)) canvas.closest(".signal-plot").querySelector(".chart-inspect").textContent = "Move cursor over chart to inspect values.";
+      canvas.closest(".signal-plot").querySelector(".chart-inspect").textContent = "Move cursor over chart to inspect values.";
     });
     drawSignals();
     const { width: trackWidth, height: trackHeight } = sizeCanvas(positionTrack); const trackContext = positionTrack.getContext("2d"); trackContext.fillStyle = "#090c12"; trackContext.fillRect(0, 0, trackWidth, trackHeight);
@@ -380,21 +381,49 @@
   }
 
   function downloadCanvasPng(canvas, name, cursorInfo = null) {
-    const detail = cursorInfo?.().trim() || "";
+    const detail = cursorInfo?.() || "";
     const dpr = window.devicePixelRatio || 1;
     const exportCanvas = document.createElement("canvas");
-    const footerHeight = (detail ? 44 : 30) * dpr;
     exportCanvas.width = canvas.width;
-    exportCanvas.height = canvas.height + footerHeight;
     const context = exportCanvas.getContext("2d");
+    const lines = [];
+    if (Array.isArray(detail)) {
+      context.font = `${11 * dpr}px "Segoe UI", sans-serif`;
+      const maxWidth = Math.max(1, canvas.width - 24 * dpr);
+      let line = []; let lineWidth = 0;
+      for (const run of detail) for (const token of run.text.match(/\S+\s*|\s+/g) || []) {
+        const width = context.measureText(token).width;
+        if (lineWidth && lineWidth + width > maxWidth) { lines.push(line); line = []; lineWidth = 0; }
+        if (width > maxWidth) {
+          for (const character of token) {
+            const characterWidth = context.measureText(character).width;
+            if (lineWidth && lineWidth + characterWidth > maxWidth) { lines.push(line); line = []; lineWidth = 0; }
+            line.push({ text: character, color: run.color }); lineWidth += characterWidth;
+          }
+        } else { line.push({ text: token, color: run.color }); lineWidth += width; }
+      }
+      if (line.length) lines.push(line);
+    }
+    const footerHeight = (Array.isArray(detail) ? Math.max(30, 30 + lines.length * 14) : detail.trim() ? 44 : 30) * dpr;
+    exportCanvas.height = canvas.height + footerHeight;
     context.fillStyle = "#090c12"; context.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
     context.drawImage(canvas, 0, 0);
     context.fillStyle = "#e5e9f0"; context.font = `${12 * dpr}px "Segoe UI", sans-serif`;
     context.textAlign = "left"; context.textBaseline = "top";
     context.fillText(name, 12 * dpr, canvas.height + 5 * dpr, exportCanvas.width - 24 * dpr);
-    if (detail) {
+    if (Array.isArray(detail)) {
+      context.font = `${11 * dpr}px "Segoe UI", sans-serif`;
+      lines.forEach((line, index) => {
+        let position = 12 * dpr;
+        for (const run of line) {
+          context.fillStyle = run.color || "#9ba8bc";
+          context.fillText(run.text, position, canvas.height + (22 + index * 14) * dpr);
+          position += context.measureText(run.text).width;
+        }
+      });
+    } else if (detail.trim()) {
       context.fillStyle = "#9ba8bc"; context.font = `${11 * dpr}px "Segoe UI", sans-serif`;
-      context.fillText(detail, 12 * dpr, canvas.height + 22 * dpr, exportCanvas.width - 24 * dpr);
+      context.fillText(detail.trim(), 12 * dpr, canvas.height + 22 * dpr, exportCanvas.width - 24 * dpr);
     }
     exportCanvas.toBlob((blob) => {
       if (!blob) { setStatus(`Could not export ${name} as PNG`); return; }
@@ -647,24 +676,92 @@
     appendHistory(map.get(key).values, { epoch, value });
   }
 
+  function signalSampleEpoch(tow = null) {
+    if (signalEpoch.latest === null) signalEpoch.latest = 1;
+    if (!Number.isFinite(tow) || tow < 0 || tow >= 604800000) return signalEpoch.latest;
+    if (signalEpoch.tow === null) { signalEpoch.tow = tow; return signalEpoch.latest; }
+    const delta = ((tow - signalEpoch.tow + 907200000) % 604800000) - 302400000;
+    const epoch = Math.round((signalEpoch.latest + delta / 1000) * 1000) / 1000;
+    if (delta > 0) { signalEpoch.latest = epoch; signalEpoch.tow = tow; }
+    return epoch;
+  }
+
+  function recordSignalUtc(payload, messageId) {
+    const pvt = messageId === 0x07;
+    if (payload.length < (pvt ? 92 : 20)) return;
+    const valid = pvt ? (payload[11] & 3) === 3 : (payload[19] & 7) === 7;
+    if (!valid) return;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const tow = data.getUint32(0, true);
+    if (tow >= 604800000) return;
+    const offset = pvt ? 4 : 12;
+    const year = data.getUint16(offset, true); const month = payload[offset + 2]; const day = payload[offset + 3];
+    const hour = payload[offset + 4]; const minute = payload[offset + 5]; const second = payload[offset + 6];
+    if (year < 1980 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 60) return;
+    const utcMs = Date.UTC(year, month - 1, day, hour, minute, second) + data.getInt32(pvt ? 16 : 8, true) / 1e6;
+    const epoch = signalSampleEpoch(tow);
+    if (!signalEpoch.clocks) signalEpoch.clocks = new Map();
+    signalEpoch.clocks.set(epoch, utcMs);
+    for (const key of signalEpoch.clocks.keys()) if (key < signalEpoch.latest - HISTORY_LENGTH + 1) signalEpoch.clocks.delete(key);
+    while (signalEpoch.clocks.size > HISTORY_LENGTH) signalEpoch.clocks.delete(signalEpoch.clocks.keys().next().value);
+  }
+
+  function recordSignalComputerTime(epoch) {
+    if (replayData || replayRebuilding || epoch < 1) return;
+    if (!signalEpoch.computerClocks) signalEpoch.computerClocks = new Map();
+    if (!signalEpoch.computerClocks.has(epoch)) signalEpoch.computerClocks.set(epoch, Date.now());
+    for (const key of signalEpoch.computerClocks.keys()) if (key < signalEpoch.latest - HISTORY_LENGTH + 1) signalEpoch.computerClocks.delete(key);
+    while (signalEpoch.computerClocks.size > HISTORY_LENGTH) signalEpoch.computerClocks.delete(signalEpoch.computerClocks.keys().next().value);
+  }
+
+  function formatSignalTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    if (!signalMarkerLocalTime.checked) return date.toISOString().replace("T", " ").replace("Z", " UTC");
+    return `${new Intl.DateTimeFormat(undefined, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23", timeZoneName: "short" }).format(date)} (local)`;
+  }
+
+  function signalEpochTime(epoch, source = signalMarkerTimeSource.value) {
+    if (epoch < 1 || signalEpoch.latest === null) return "Time unavailable";
+    if (source === "computer") {
+      let receivedAt; let distance = 0.050001;
+      if (signalEpoch.computerClocks) for (const [sampleEpoch, timestamp] of signalEpoch.computerClocks) {
+        if (Math.abs(sampleEpoch - epoch) < distance) { distance = Math.abs(sampleEpoch - epoch); receivedAt = timestamp; }
+      }
+      if (receivedAt === undefined) return replayData ? "Computer capture time unavailable (replay)" : "Computer reception time unavailable";
+      return `Computer RX ${formatSignalTimestamp(receivedAt)}`;
+    }
+    const clocks = signalEpoch.clocks;
+    let anchor = null;
+    if (clocks) for (const [clockEpoch, utcMs] of clocks) {
+      if (!anchor || Math.abs(epoch - clockEpoch) < Math.abs(epoch - anchor.epoch)) anchor = { epoch: clockEpoch, utcMs };
+    }
+    if (anchor) return `Receiver ${formatSignalTimestamp(anchor.utcMs + (epoch - anchor.epoch) * 1000)}${anchor.epoch === epoch ? "" : " (estimated)"}`;
+    if (signalEpoch.tow === null) return "Time unavailable";
+    const tow = ((signalEpoch.tow + (epoch - signalEpoch.latest) * 1000) % 604800000 + 604800000) % 604800000;
+    return `GPS TOW ${(tow / 1000).toFixed(3)} s`;
+  }
+
   function drawSignalChart(canvas, series, options) {
     if (!canvas) return;
     const { width, height } = sizeCanvas(canvas); const context = canvas.getContext("2d"); const dpr = window.devicePixelRatio || 1;
     const margin = { left: 48 * dpr, right: 14 * dpr, top: 12 * dpr, bottom: 27 * dpr }; const box = { x: margin.left, y: margin.top, width: width - margin.left - margin.right, height: height - margin.top - margin.bottom };
     context.fillStyle = "#090c12"; context.fillRect(0, 0, width, height);
-    let lastEpoch = -Infinity; let minValue = Infinity; let maxValue = -Infinity;
+    let lastEpoch = options.lastEpoch ?? -Infinity; let minValue = Infinity; let maxValue = -Infinity;
     let hasSamples = false; let hasValues = false;
+    if (options.lastEpoch === null || options.lastEpoch === undefined) {
+      for (const item of series) for (const sample of item.values) lastEpoch = Math.max(lastEpoch, sample.epoch);
+    }
     for (const item of series) {
       for (const sample of item.values) {
         hasSamples = true;
-        lastEpoch = Math.max(lastEpoch, sample.epoch);
+        if (sample.epoch < lastEpoch - HISTORY_LENGTH + 1 || sample.epoch > lastEpoch) continue;
         if (!Number.isFinite(sample.value)) continue;
         hasValues = true;
         minValue = Math.min(minValue, sample.value);
         maxValue = Math.max(maxValue, sample.value);
       }
     }
-    if (!hasSamples) return;
+    if (!hasSamples && !Number.isFinite(lastEpoch)) { signalChartState.delete(canvas); return; }
     const firstEpoch = lastEpoch - HISTORY_LENGTH + 1;
     signalChartState.set(canvas, { series, box, firstEpoch, lastEpoch });
     const min = options.min ?? (hasValues ? minValue : 0); const max = options.max ?? (hasValues ? maxValue : 1); const range = Math.max(max - min, 1);
@@ -680,14 +777,16 @@
       if (!item.values.length) return;
       const itemMin = item.min ?? min; const itemMax = item.max ?? max;
       context.strokeStyle = item.color; context.fillStyle = item.color; context.lineWidth = 1.5 * dpr; context.beginPath();
-      let hasSegment = false;
-      item.values.forEach((sample) => {
-        if (!Number.isFinite(sample.value)) { hasSegment = false; return; }
+      let hasSegment = false; let previousEpoch = null;
+      [...item.values].sort((left, right) => left.epoch - right.epoch).forEach((sample) => {
+        if (!Number.isFinite(sample.value) || sample.epoch < firstEpoch || sample.epoch > lastEpoch) { hasSegment = false; return; }
+        if (previousEpoch !== null && sample.epoch - previousEpoch > 1.001) hasSegment = false;
         const x = box.x + (sample.epoch - firstEpoch) / (lastEpoch - firstEpoch) * box.width; const y = yForValue(sample.value, itemMin, itemMax);
         if (options.points) { context.beginPath(); context.arc(x, y, 3 * dpr, 0, Math.PI * 2); context.fill(); }
         else { if (hasSegment) context.lineTo(x, y); else context.moveTo(x, y); hasSegment = true; }
+        previousEpoch = sample.epoch;
       });
-      if (!options.points && hasSegment) context.stroke();
+      if (!options.points) context.stroke();
     });
     const hoverEpoch = signalHover.get(canvas);
     if (hoverEpoch !== undefined) {
@@ -697,44 +796,81 @@
     context.restore();
   }
 
-  function updateSignalHover(canvas, event, force = false) {
-    if (signalHoverPinned.has(canvas) && !force) return false;
+  function renderSignalReadout(canvas) {
+    const epoch = signalHover.get(canvas);
     const state = signalChartState.get(canvas);
-    if (!state || !state.series.length) return false;
+    if (epoch === undefined || !state) return;
+    const readout = canvas.closest(".signal-plot").querySelector(".chart-inspect");
+    const values = canvas === signalCharts.cno || canvas === signalCharts.doppler ? [] : state.series.filter((item) => item.values.length).map((item) => {
+      let closestEpoch = null; let distance = 0.050001;
+      if (epoch >= 1) for (const candidate of item.values) {
+        if (Math.abs(candidate.epoch - epoch) < distance) { distance = Math.abs(candidate.epoch - epoch); closestEpoch = candidate.epoch; }
+      }
+      const samples = closestEpoch === null ? [] : item.values.filter((candidate) => Math.abs(candidate.epoch - closestEpoch) < 0.0005);
+      const text = samples.filter((sample) => Number.isFinite(sample.value)).map((sample) => sample.value.toFixed(1)).join(", ") || "n/a";
+      return `<span style="color:${item.color}">${item.label}: ${text}</span>`;
+    });
+    readout.innerHTML = `Epoch ${epoch < 1 ? "n/a" : epoch} | ${signalEpochTime(epoch)}${values.length ? ` | ${values.join(" | ")}` : ""}`;
+    readout.title = readout.textContent;
+  }
+
+  function signalExportReadout(canvas) {
+    if (!signalHover.has(canvas)) return [];
+    const readout = canvas.closest(".signal-plot").querySelector(".chart-inspect");
+    return [{ text: "Cursor: ", color: "#9ba8bc" }, ...Array.from(readout.childNodes, (node) => ({ text: node.textContent, color: node.nodeType === 1 && node.style.color ? node.style.color : "#9ba8bc" }))];
+  }
+
+  function updateSignalHover(canvas, event, force = false) {
+    if (Object.values(signalCharts).some((chart) => signalHoverPinned.has(chart)) && !force) return false;
+    const state = signalChartState.get(canvas);
+    if (!state) return false;
     const bounds = canvas.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
     const x = (event.clientX - bounds.left) * dpr;
     if (x < state.box.x || x > state.box.x + state.box.width) return false;
-    const epoch = Math.round(state.firstEpoch + (x - state.box.x) / state.box.width * (state.lastEpoch - state.firstEpoch));
-    signalHover.set(canvas, epoch);
-    const readout = canvas.closest(".signal-plot").querySelector(".chart-inspect");
-    const values = state.series.filter((item) => item.values.length).map((item) => {
-      const sample = epoch < 0 ? undefined : item.values.find((candidate) => candidate.epoch === epoch);
-      return `<span style="color:${item.color}">${item.label}: ${sample && Number.isFinite(sample.value) ? sample.value.toFixed(1) : "n/a"}</span>`;
-    });
-    readout.innerHTML = `Epoch ${epoch < 0 ? "n/a" : epoch} | ${values.join(" | ")}`;
+    const requestedEpoch = state.firstEpoch + (x - state.box.x) / state.box.width * (state.lastEpoch - state.firstEpoch);
+    let epoch = Math.round(requestedEpoch); let distance = 0.500001;
+    for (const chart of [canvas, ...Object.values(signalCharts)]) {
+      for (const item of signalChartState.get(chart)?.series || []) for (const sample of item.values) {
+        if (sample.epoch < Math.max(1, state.firstEpoch) || sample.epoch > state.lastEpoch) continue;
+        if (Math.abs(sample.epoch - requestedEpoch) < distance) { distance = Math.abs(sample.epoch - requestedEpoch); epoch = sample.epoch; }
+      }
+    }
+    for (const chart of Object.values(signalCharts)) {
+      signalHover.set(chart, epoch);
+      if (force) signalHoverPinned.add(chart);
+      renderSignalReadout(chart);
+    }
     drawSignals();
     return true;
   }
 
   function clearSignalHover(canvas) {
-    signalHover.delete(canvas);
-    signalHoverPinned.delete(canvas);
-    canvas.closest(".signal-plot").querySelector(".chart-inspect").textContent = "Move cursor over chart to inspect values.";
+    for (const chart of Object.values(signalCharts)) {
+      signalHover.delete(chart);
+      signalHoverPinned.delete(chart);
+      const readout = chart.closest(".signal-plot").querySelector(".chart-inspect");
+      readout.textContent = "Move cursor over chart to inspect values.";
+      readout.title = "";
+    }
     drawSignals();
   }
 
   function drawSignals() {
+    const drawChart = (canvas, series, options) => {
+      drawSignalChart(canvas, series, { ...options, lastEpoch: signalEpoch.latest });
+      renderSignalReadout(canvas);
+    };
     const selectedSeries = (history) => [...history.entries()].filter(([key]) => activeConstellations.has(Number(key.split(":")[0]))).map(([, series]) => series);
     const cnoSeries = selectedSeries(signalHistory.cno); const dopplerSeries = selectedSeries(signalHistory.doppler);
     const blockSeries = (history, colors) => history.map((values, index) => ({ label: `RF ${index + 1}`, color: colors[index % colors.length], values }));
-    drawSignalChart(signalCharts.cno, cnoSeries, { min: 0, max: 55 });
-    drawSignalChart(signalCharts.doppler, dopplerSeries, {});
-    drawSignalChart(signalCharts.jamState, blockSeries(signalHistory.jamState, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
-    drawSignalChart(signalCharts.jamIndex, blockSeries(signalHistory.jamIndex, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: 0, max: 255 });
+    drawChart(signalCharts.cno, cnoSeries, { min: 0, max: 55 });
+    drawChart(signalCharts.doppler, dopplerSeries, {});
+    drawChart(signalCharts.jamState, blockSeries(signalHistory.jamState, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    drawChart(signalCharts.jamIndex, blockSeries(signalHistory.jamIndex, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: 0, max: 255 });
     const pgaSeries = blockSeries(signalHistory.pga, ["#ff66cc", "#ffaaaa", "#ccccff"]).map((series) => ({ ...series, min: 0, max: 55 }));
-    drawSignalChart(signalCharts.agc, [...blockSeries(signalHistory.agc, ["#44ccff", "#88eeff", "#bbeddd"]), ...pgaSeries], { min: 0, max: 8191 });
-    drawSignalChart(signalCharts.spoof, [{ label: "Spoof", color: "#00ffff", values: signalHistory.spoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
-    drawSignalChart(signalCharts.secState, [{ label: "Jamming", color: "#ffb347", values: signalHistory.secJam }, { label: "Spoofing", color: "#ff66cc", values: signalHistory.secSpoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], points: true, thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    drawChart(signalCharts.agc, [...blockSeries(signalHistory.agc, ["#44ccff", "#88eeff", "#bbeddd"]), ...pgaSeries], { min: 0, max: 8191 });
+    drawChart(signalCharts.spoof, [{ label: "Spoof", color: "#00ffff", values: signalHistory.spoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    drawChart(signalCharts.secState, [{ label: "Jamming", color: "#ffb347", values: signalHistory.secJam }, { label: "Spoofing", color: "#ff66cc", values: signalHistory.secSpoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], points: true, thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
     renderGnssThreatSummary();
     const frequencyGuides = [...BAND_MARKERS.reduce((groups, marker) => {
       if (!groups.has(marker.frequency)) groups.set(marker.frequency, { value: marker.frequency, color: marker.color, labels: [] });
@@ -742,7 +878,7 @@
       if (!group.labels.includes(shortName)) group.labels.push(shortName);
       return groups;
     }, new Map()).values()].filter((guide) => guide.value >= 1150000000 && guide.value <= 1650000000).map((guide) => ({ ...guide, label: guide.labels.join("/") }));
-    drawSignalChart(signalCharts.secFrequency, [{ label: "Jammed frequency", color: "#ff4444", values: signalHistory.secFrequency }], { min: 1150000000, max: 1650000000, formatY: (value) => `${(value / 1e6).toFixed(0)}M`, points: true, thresholds: frequencyGuides });
+    drawChart(signalCharts.secFrequency, [{ label: "Jammed frequency", color: "#ff4444", values: signalHistory.secFrequency }], { min: 1150000000, max: 1650000000, formatY: (value) => `${(value / 1e6).toFixed(0)}M`, points: true, thresholds: frequencyGuides });
   }
 
   function gnssThreatPresentation(kind, value, enabled = true) {
@@ -770,23 +906,23 @@
     });
   }
 
-  const inspectionDisabledCharts = new Set([signalCharts.cno, signalCharts.doppler]);
+  signalMarkerTimeSource.addEventListener("change", () => drawSignals());
+  signalMarkerLocalTime.addEventListener("change", () => drawSignals());
   Object.values(signalCharts).forEach((canvas) => {
     const readout = document.createElement("span");
     readout.className = "chart-inspect";
     const inspectStrip = document.createElement("div");
     inspectStrip.className = "chart-inspect-strip";
-    readout.textContent = inspectionDisabledCharts.has(canvas) ? "Cursor inspection disabled for multi-series view." : "Move cursor over chart to inspect values.";
+    readout.textContent = "Move cursor over chart to inspect values.";
     inspectStrip.append(readout);
     const plot = canvas.closest(".signal-plot");
     const header = plot.querySelector("header");
     const title = header.querySelector("h2").childNodes[0].textContent.trim();
-    header.append(createCanvasExportButton(canvas, title, () => signalHover.has(canvas) ? `Cursor: ${plot.querySelector(".chart-inspect").textContent}` : ""));
+    header.append(createCanvasExportButton(canvas, title, () => signalExportReadout(canvas)));
     header.after(inspectStrip);
-    if (inspectionDisabledCharts.has(canvas)) { canvas.classList.add("inspection-disabled"); return; }
     canvas.addEventListener("pointermove", (event) => updateSignalHover(canvas, event));
     canvas.addEventListener("pointerleave", () => { if (!signalHoverPinned.has(canvas)) clearSignalHover(canvas); });
-    canvas.addEventListener("click", (event) => { if (event.button === 0 && updateSignalHover(canvas, event, true)) signalHoverPinned.add(canvas); });
+    canvas.addEventListener("click", (event) => { if (event.button === 0) updateSignalHover(canvas, event, true); });
     canvas.addEventListener("contextmenu", (event) => { event.preventDefault(); clearSignalHover(canvas); });
   });
 
@@ -1365,6 +1501,7 @@
     const identity = (satellite) => satellite.gnssId * 256 + satellite.svId;
     const value = (satellite) => sort.key === "id" ? identity(satellite) : satellite[sort.key];
     return (report?.satellites || []).filter((satellite) => constellations.has(satellite.gnssId) && (!usedOnly || satellite.used)).sort((left, right) => {
+      if (sort.key === "corrections") return satelliteCorrectionText(left).localeCompare(satelliteCorrectionText(right)) * sort.direction || identity(left) - identity(right);
       const leftValue = value(left); const rightValue = value(right);
       if (leftValue === null || leftValue === undefined) return rightValue === null || rightValue === undefined ? identity(left) - identity(right) : 1;
       if (rightValue === null || rightValue === undefined) return -1;
@@ -1466,29 +1603,27 @@
     if (hasCounts) hasCorrectionReports[solution] = { ...hasCounts, receivedAt: Date.now() };
     renderHasDiagnostics();
     if (solution !== "NAV" || !report) return;
-    const epoch = ++signalEpoch.cno;
+    const epoch = signalSampleEpoch(report.iTow);
     for (const satellite of report.satellites) appendSeries(signalHistory.cno, `${satellite.gnssId}:${satellite.svId}`, epoch, satellite.cno, gnssColor(satellite.gnssId));
     signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
   }
 
   function parseRawx(payload) {
     if (payload.length < 16) return;
-    const count = Math.min(payload[11], Math.floor((payload.length - 16) / 32)); const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength); const epoch = ++signalEpoch.doppler;
+    const count = Math.min(payload[11], Math.floor((payload.length - 16) / 32)); const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength); const epoch = signalSampleEpoch(data.getFloat64(0, true) * 1000);
     for (let index = 0; index < count; index++) { const offset = 16 + index * 32; const gnssId = payload[offset + 20]; const svId = payload[offset + 21]; const sigId = payload[offset + 22]; appendSeries(signalHistory.doppler, `${gnssId}:${svId}:${sigId}`, epoch, data.getFloat32(offset + 16, true), gnssColor(gnssId)); }
     signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
   }
 
   function parseMonRf(payload) {
     if (payload.length < 4) return;
-    const count = Math.min(payload[1], Math.floor((payload.length - 4) / 24)); const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength); const epoch = ++signalEpoch.monRf;
+    const count = Math.min(payload[1], Math.floor((payload.length - 4) / 24)); const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength); const epoch = signalSampleEpoch();
     for (let index = 0; index < count; index++) {
       const offset = 4 + index * 24;
       while (signalHistory.jamState.length <= index) { signalHistory.jamState.push([]); signalHistory.jamIndex.push([]); signalHistory.agc.push([]); }
       appendHistory(signalHistory.jamState[index], { epoch, value: payload[offset + 1] & 0x03 });
       appendHistory(signalHistory.jamIndex[index], { epoch, value: payload[offset + 16] });
       appendHistory(signalHistory.agc[index], { epoch, value: data.getUint16(offset + 14, true) });
-      while (signalHistory.pga.length <= index) signalHistory.pga.push([]);
-      appendHistory(signalHistory.pga[index], { epoch, value: latestPga[index] ?? 0 });
     }
     receiverThreat.monRfJam = Math.max(0, ...signalHistory.jamState.map((history) => history.at(-1)?.value ?? 0));
     signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
@@ -1498,7 +1633,7 @@
     if (payload.length < 8) return;
     const state = (payload[7] >> 3) & 0x03;
     receiverThreat.navSpoof = state;
-    appendHistory(signalHistory.spoof, { epoch: ++signalEpoch.spoof, value: state });
+    appendHistory(signalHistory.spoof, { epoch: signalSampleEpoch(new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true)), value: state });
     signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
   }
 
@@ -1890,7 +2025,7 @@
       secSecuritySummary.innerHTML = `<strong>SEC-SIG:</strong> ${secSigRawFramesReceived} frame${secSigRawFramesReceived === 1 ? "" : "s"} received, but v${version} payload length ${payload.length} is not decoded yet.`;
       return;
     }
-    const epoch = ++signalEpoch.sec;
+    const epoch = signalSampleEpoch();
     secSigFramesReceived += 1;
     appendHistory(signalHistory.secJam, { epoch, value: jamState });
     appendHistory(signalHistory.secSpoof, { epoch, value: spoofState });
@@ -1937,6 +2072,13 @@
   }
 
   function handleUbx(messageClass, messageId, payload) {
+    if ((messageClass === 0x01 || messageClass === 0x29) && [0x07, 0x04, 0x21, 0x35, 0x03, 0x25].includes(messageId) && payload.length >= 8) {
+      const previousEpoch = signalEpoch.latest;
+      const epoch = signalSampleEpoch(new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true));
+      recordSignalComputerTime(epoch);
+      if (messageClass === 0x01 && [0x07, 0x21].includes(messageId)) recordSignalUtc(payload, messageId);
+      if (signalEpoch.latest !== previousEpoch && !replayRebuilding) drawSignals();
+    }
     if (messageClass === 0x0a && messageId === 0x36) {
       parseMonCommsTx(payload);
       const interfaceName = parseMonCommsInterface(payload);
@@ -1952,7 +2094,11 @@
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x04) parseNavDop(payload, messageClass === 0x29 ? "NAV2" : "NAV");
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x21) parseNavTimeUtc(payload);
     if (messageClass === 0x01 && messageId === 0x35) parseNavSat(payload, "NAV");
-    if (messageClass === 0x02 && messageId === 0x15) parseRawx(payload);
+    if (messageClass === 0x02 && messageId === 0x15 && payload.length >= 16) {
+      const epoch = signalSampleEpoch(new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getFloat64(0, true) * 1000);
+      recordSignalComputerTime(epoch);
+      parseRawx(payload);
+    }
     if (messageClass === 0x0a && messageId === 0x38) parseMonRf(payload);
     if (messageClass === 0x01 && messageId === 0x03) parseNavStatus(payload);
     if (messageClass === 0x27 && messageId === 0x09) parseSecSig(payload);
@@ -2128,7 +2274,7 @@
     if (payload.length < 4) return;
     const usable = Math.min(payload[1], Math.floor((payload.length - 4) / BLOCK_BYTES)); if (!usable) return; if (blockViews.length !== usable) buildBlocks(usable);
     const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-    const pgaEpoch = ++signalEpoch.pga;
+    const epoch = signalSampleEpoch();
     const now = new Date();
     const markerSlot = Math.floor(now.getTime() / (settings.waterfallMarkerMinutes * 60 * 1000));
     for (let index = 0; index < usable; index++) {
@@ -2144,7 +2290,8 @@
       }
       view.timestampMarkers = view.timestampMarkers.filter((marker) => view.waterfallFrame - marker.frame < view.rowCount);
       view.frame = { center, span, pga, bins, average }; view.rows.set(bins, view.row * BIN_COUNT); view.timestamps[view.row] = now.getTime(); view.row = (view.row + 1) % view.rowCount; view.filledRows = Math.min(view.rowCount, view.filledRows + 1); if (view.row === 0) view.hasRows = true; view.waterfallFrame += 1; view.meta.textContent = `${formatHz(center - span / 2)} - ${formatHz(center + span / 2)} | span ${formatHz(span)} | PGA ${pga}dB`; scheduleViewDraw(view);
-      latestPga[index] = pga;
+      while (signalHistory.pga.length <= index) signalHistory.pga.push([]);
+      appendHistory(signalHistory.pga[index], { epoch, value: pga });
     }
     if (signalHistory.pga.length && !replayRebuilding) drawSignals();
     if (!replayRebuilding) setStatus(`Receiving MON-SPAN: ${usable} RF block${usable === 1 ? "" : "s"}`);
