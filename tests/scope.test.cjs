@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const monCommsProbePath = path.join(__dirname, "..", "tools", "mon-comms-probe", "probe.cjs");
 const monCommsProbe = fs.existsSync(monCommsProbePath) ? require(monCommsProbePath) : null;
 
-const source = fs.readFileSync(path.join(__dirname, "..", "scope.js"), "utf8").replace(/\r\n/g, "\n");
+const source = fs.readFileSync(path.join(__dirname, "..", "insight.js"), "utf8").replace(/\r\n/g, "\n");
 
 function loadFunctions(names, globals) {
   const context = vm.createContext(globals);
