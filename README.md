@@ -1,6 +1,6 @@
 # UBX Insight 
 
-<img src="logo.png" alt="UBX Insight" width="320">
+<img src="logo.png" alt="UBX Insight" width="640">
 
 Plot lots of data from your Ublox receiver in-browser.  
 Requires an F9 or X20-series Ublox receiver.
