@@ -2,7 +2,16 @@
 Plot Ublox UBX SPAN (RF spectrum) power spectral density plots in-browser
 Requires an F9 or X20-series Ublox receiver.
 
-### Browser app:
+## Browser app:
+- Try it out here: https://christian-skjetne.github.io/ubxInsight/
+- or just clone and open the index.html file in the browser. No server needed.
+## useful info:
+- This web app gets a lot of data from your receiver, you need to set the baudrate very high (I suggest 1M or 2M minimum)
+- The baudrate should be set on both uart1 and uart2. If one of them is bogged down it effect the other for some reason.
+- You can set the baudrate in RAM from the settings button. If you unplug the unit you need to do it again.
+
+
+### Ai generated description of app features:
 - Serve this directory over localhost, for example: `python -m http.server 8765`
 - Open `index.html` in Chrome or Edge.
 - The page can also be opened directly. In `file://` mode the map automatically
