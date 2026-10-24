@@ -59,13 +59,12 @@ Requires an F9 or X20-series Ublox receiver.
 	bottleneck. For 8N1, 38,400 baud carries at most 3,840 bytes/s. A RAWX frame
 	with 100 measurements needs 3,224 bytes before adding MON-SPAN, navigation,
 	security and other output. Native USB does not have this UART baud limit.
-- Settings has an explicit baud-rate target, defaulting to `USB / host port only`
-	each time the dialog opens. This updates the host serial setting without changing
-	either receiver UART; it does not increase native USB throughput. `UART1 + host
-	port` and `UART2 + host port` configure the selected receiver UART, wait for ACK,
-	and reopen the host port at that rate. Either UART can be configured through USB;
-	the interface-status estimate is not used to choose the target. UART changes
-	require a connected receiver, even when the selected rate matches the host rate.
+- Settings stores one baud rate for the host connection and both receiver UARTs.
+	Changing it while connected configures UART1 and UART2, waits for ACKs, then
+	reopens the host connection at that rate. On connection, the saved rate is applied
+	to both UARTs. The interface-status estimate is not used to choose a UART. Native
+	USB has no UART baud limit. UART1/2 TX queue occupancy above 90% displays a
+	persistent status-bar tip to raise the rate in Settings.
 - Select `Replay .ubx` to open the playback controls for play/pause, speed and seeking.
 	The `1x` rate is estimated from the selected receiver baud rate.
 
@@ -82,12 +81,16 @@ message order and content, but not the original host-side timing between serial 
 	cadence; overdue results turn yellow. Explicit failures turn red immediately and
 	remain red until replaced by a new result. Missing SEC-OSNMA telemetry for more
 	than 40 seconds also turns otherwise-green periodic indicators yellow.
-- `Apply OSNMA offset & resend trusted UTC` adds the last passed receiver-reported
+- `Send trusted time` enables the receiver's trusted-time requirement, applies the
+	receiver configuration, and then sends computer UTC and its stated uncertainty.
+	The checkbox is a saved preference; selecting it alone does not change receiver
+	configuration. Use `Send config` to apply the disabled state when turning the
+	requirement off. `Apply OSNMA offset & resend trusted UTC` adds the last passed receiver-reported
 	OSNMA time difference to the offset used for the accepted trusted UTC input,
 	sends the adjusted UTC as new trusted-time assistance, and updates app UTC only
 	if the receiver acknowledges it. Windows time is unchanged; app correction
-	resets on disconnect or replay. Receiver configuration must first send accepted
-	computer UTC assistance with the time-sync requirement enabled.
+	resets on disconnect or replay. The trusted-time action requires acknowledged
+	receiver configuration and accepted UTC assistance before correction is available.
 - Each accepted assistance message requires an observed non-completed time-sync
 	status followed by an authenticated passed check before correction is available.
 	That result remains usable between authentication epochs, without a check-age

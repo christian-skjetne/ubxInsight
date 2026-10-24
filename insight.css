@@ -7,9 +7,13 @@ header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; bord
 #navigation-status-row { border-bottom: 1px solid var(--line); }
 .status-message { display: inline-flex; align-items: center; height: 20px; flex: 0 1 420px; min-width: 180px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .status-item { display: inline-flex; align-items: center; min-height: 20px; white-space: nowrap; line-height: 20px; }
+.status-item[hidden] { display: none; }
 .status-metric { gap: 8px; }
 .material-symbols-outlined { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; margin-right: 3px; font-size: 16px; line-height: 1; color: #72c7e7; transform: translateY(-1px); }
 .status-no-data { color: var(--muted); }
+.status-tx-normal { color: #66ff88; }
+.status-tx-warning { color: #ffd37a; }
+.status-tx-critical { color: #ff7262; }
 .status-fix-good { color: #66ff88; }
 .status-fix-warning { color: #ffff66; }
 .status-fix-bad { color: #ff7262; }

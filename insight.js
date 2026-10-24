@@ -6,6 +6,7 @@
   const WATERFALL_ROWS_PER_MINUTE = 60;
   const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1000000, 1500000, 2000000, 3000000, 4000000, 6000000, 8000000];
   const HISTORY_LENGTH = 600;
+  const SIGNAL_TOW_DISCONTINUITY_MS = 10000;
   const DARK_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/fiord";
   const LIGHT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
   const SETTINGS_KEY = "ubx-scope-settings-v1";
@@ -175,7 +176,6 @@
   const peakDecay = document.querySelector("#peak-decay");
   const darkMap = document.querySelector("#dark-map");
   const receiverBaud = document.querySelector("#receiver-baud");
-  const receiverBaudTarget = document.querySelector("#receiver-baud-target");
   const configureAllInterfaces = document.querySelector("#configure-all-interfaces");
   const receiverInterface = document.querySelector("#receiver-interface");
   const receiverFirmware = document.querySelector("#receiver-firmware");
@@ -242,12 +242,21 @@
   let secSigFramesReceived = 0;
   let secSigRawFramesReceived = 0;
   let signalEpoch = { latest: null, tow: null };
+  let signalDrawQueued = false;
   const activeConstellations = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
-  const signalHover = new WeakMap();
-  const signalHoverPinned = new WeakSet();
+  let signalHover = new WeakMap();
+  let signalHoverPinned = new WeakSet();
   const signalChartState = new WeakMap();
 
-  const setStatus = (message) => { status.textContent = message; };
+  let statusMessage = status.textContent;
+  let receiverTxWarningMessage = "";
+  function renderStatusMessage() {
+    status.textContent = receiverTxWarningMessage || statusMessage;
+    status.title = status.textContent;
+    status.classList.toggle("status-tx-warning", Boolean(receiverTxWarningMessage));
+  }
+  function setStatus(message) { statusMessage = message; renderStatusMessage(); }
+  function setReceiverTxWarning(message) { receiverTxWarningMessage = message; renderStatusMessage(); }
   const receiverBlockCount = () => receiver.value === "x20" ? 3 : 2;
   const formatHz = (value) => value >= 1e9 ? `${(value / 1e9).toFixed(6)} GHz` : `${(value / 1e6).toFixed(3)} MHz`;
   const plotBox = (width, height) => { const dpr = window.devicePixelRatio || 1; return { x: PLOT_MARGIN.left * dpr, y: PLOT_MARGIN.top * dpr, width: width - (PLOT_MARGIN.left + PLOT_MARGIN.right) * dpr, height: height - (PLOT_MARGIN.top + PLOT_MARGIN.bottom) * dpr }; };
@@ -279,6 +288,9 @@
     osnmaClockSettings.accuracySeconds = Number.isFinite(value) ? Math.max(1, Math.min(60, Math.round(value))) : DEFAULT_OSNMA_CLOCK_SETTINGS.accuracySeconds;
     osnmaClockSettings.showLocalTime = osnmaClockLocalTime.checked;
     syncOsnmaClockForm(); saveOsnmaClockSettings(); refreshLocalClock();
+    osnmaTrustedTimeStatus.textContent = osnmaClockSettings.useComputerClock
+      ? "Click Send trusted time to apply the receiver requirement and send computer UTC."
+      : "Trusted UTC requirement is off; click Send trusted time to enable it and send UTC. Send config applies the off state.";
     refreshOsnmaClock();
   }
   function syncReceiverBaud() { baud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); }
@@ -298,7 +310,7 @@
   function applyCompactMode() {
     document.body.classList.toggle("compact-mode", settings.compactMode);
   }
-  function syncSettingsForm() { compactMode.checked = settings.compactMode; configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaudTarget.value = "host"; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
+  function syncSettingsForm() { compactMode.checked = settings.compactMode; configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
   function resetTraceBuffers() { blockViews.forEach((view) => { view.averageHistory = []; view.peak = null; }); }
   function resetWaterfallHistory() {
     blockViews.forEach((view) => {
@@ -345,6 +357,8 @@
     fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
     latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --"; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--'; speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--'; headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
   }
+
+  function resetLiveConnectionState() { receiveBuffer = new Uint8Array(0); resetReplayDerivedViews(false); }
 
   function createBlock(index) {
     const section = document.createElement("section");
@@ -686,6 +700,15 @@
     if (!Number.isFinite(tow) || tow < 0 || tow >= 604800000) return signalEpoch.latest;
     if (signalEpoch.tow === null) { signalEpoch.tow = tow; return signalEpoch.latest; }
     const delta = ((tow - signalEpoch.tow + 907200000) % 604800000) - 302400000;
+    if (delta < -SIGNAL_TOW_DISCONTINUITY_MS) {
+      signalEpoch.latest += 2;
+      signalEpoch.tow = tow;
+      signalEpoch.clocks?.clear();
+      signalEpoch.computerClocks?.clear();
+      signalHover = new WeakMap();
+      signalHoverPinned = new WeakSet();
+      return signalEpoch.latest;
+    }
     const epoch = Math.round((signalEpoch.latest + delta / 1000) * 1000) / 1000;
     if (delta > 0) { signalEpoch.latest = epoch; signalEpoch.tow = tow; }
     return epoch;
@@ -884,6 +907,11 @@
       return groups;
     }, new Map()).values()].filter((guide) => guide.value >= 1150000000 && guide.value <= 1650000000).map((guide) => ({ ...guide, label: guide.labels.join("/") }));
     drawChart(signalCharts.secFrequency, [{ label: "Jammed frequency", color: "#ff4444", values: signalHistory.secFrequency }], { min: 1150000000, max: 1650000000, formatY: (value) => `${(value / 1e6).toFixed(0)}M`, points: true, thresholds: frequencyGuides });
+  }
+  function scheduleSignalDraw() {
+    if (signalDrawQueued) return;
+    signalDrawQueued = true;
+    requestAnimationFrame(() => { signalDrawQueued = false; drawSignals(); });
   }
 
   function gnssThreatPresentation(kind, value, enabled = true) {
@@ -1611,14 +1639,14 @@
     if (solution !== "NAV" || !report) return;
     const epoch = signalSampleEpoch(report.iTow);
     for (const satellite of report.satellites) appendSeries(signalHistory.cno, `${satellite.gnssId}:${satellite.svId}`, epoch, satellite.cno, gnssColor(satellite.gnssId));
-    signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
+    signalsEmpty.hidden = true; if (!replayRebuilding) scheduleSignalDraw();
   }
 
   function parseRawx(payload) {
     if (payload.length < 16) return;
     const count = Math.min(payload[11], Math.floor((payload.length - 16) / 32)); const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength); const epoch = signalSampleEpoch(data.getFloat64(0, true) * 1000);
     for (let index = 0; index < count; index++) { const offset = 16 + index * 32; const gnssId = payload[offset + 20]; const svId = payload[offset + 21]; const sigId = payload[offset + 22]; appendSeries(signalHistory.doppler, `${gnssId}:${svId}:${sigId}`, epoch, data.getFloat32(offset + 16, true), gnssColor(gnssId)); }
-    signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
+    signalsEmpty.hidden = true; if (!replayRebuilding) scheduleSignalDraw();
   }
 
   function parseMonRf(payload) {
@@ -1632,7 +1660,7 @@
       appendHistory(signalHistory.agc[index], { epoch, value: data.getUint16(offset + 14, true) });
     }
     receiverThreat.monRfJam = Math.max(0, ...signalHistory.jamState.map((history) => history.at(-1)?.value ?? 0));
-    signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
+    signalsEmpty.hidden = true; if (!replayRebuilding) scheduleSignalDraw();
   }
 
   function parseNavStatus(payload) {
@@ -1640,7 +1668,7 @@
     const state = (payload[7] >> 3) & 0x03;
     receiverThreat.navSpoof = state;
     appendHistory(signalHistory.spoof, { epoch: signalSampleEpoch(new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true)), value: state });
-    signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
+    signalsEmpty.hidden = true; if (!replayRebuilding) scheduleSignalDraw();
   }
 
   function renderOsnma() {
@@ -1744,7 +1772,7 @@
   }
   function refreshLocalClock(now = Date.now()) {
     osnmaUpdateLocalTime.disabled = !canCorrectLocalClock(now);
-    osnmaSendTrustedTime.disabled = !settings.enableOsnma || !writer || !reading || replayData || !osnmaClockSettings.useComputerClock || trustedClockUpdatePending || configureButton.disabled;
+    osnmaSendTrustedTime.disabled = !settings.enableOsnma || !writer || !reading || replayData || trustedClockUpdatePending || configureButton.disabled;
     const correction = `${appClockOffsetMs >= 0 ? "+" : "-"}${(Math.abs(appClockOffsetMs) / 1000).toFixed(3)} s`;
     osnmaLocalTime.textContent = `Local UTC: ${new Date(now + appClockOffsetMs).toISOString().replace("T", " ").replace("Z", " UTC")}; correction ${correction}`;
   }
@@ -1753,15 +1781,20 @@
       osnmaTrustedTimeStatus.textContent = "Enable OSNMA in Settings before sending trusted time.";
       return;
     }
-    if (!osnmaClockSettings.useComputerClock) {
-      osnmaTrustedTimeStatus.textContent = "Enable the trusted computer UTC requirement before sending.";
-      return;
-    }
     if (!writer || !reading || replayData || configureButton.disabled) {
       osnmaTrustedTimeStatus.textContent = "Connect a receiver and finish configuration before sending trusted UTC.";
       return;
     }
     const connectionId = liveConnectionId;
+    osnmaClockSettings.useComputerClock = true;
+    syncOsnmaClockForm(); saveOsnmaClockSettings();
+    osnmaTrustedTimeStatus.textContent = "Applying trusted-time configuration...";
+    const configuration = await configureMonSpan();
+    if (connectionId !== liveConnectionId) return;
+    if (!configuration?.some(({ name, result }) => name === "Require trusted computer time" && result === "ack")) {
+      osnmaTrustedTimeStatus.textContent = "Trusted-time configuration was not acknowledged; computer UTC was not sent. Check the configuration results.";
+      return;
+    }
     osnmaTrustedTimeStatus.textContent = "Sending trusted UTC and waiting for receiver acknowledgement...";
     const result = await sendTrustedClockTime();
     if (connectionId !== liveConnectionId) return;
@@ -2049,7 +2082,7 @@
     if (!jammedFrequencies.length) appendHistory(signalHistory.secFrequency, { epoch, value: null });
     const jamNames = ["Unknown", "None", "Warning", "Critical"]; const spoofNames = ["Unknown", "None", "Indicated", "Affirmed"];
     secSecuritySummary.innerHTML = `<strong>SEC-SIG v${version}:</strong> ${secSigFramesReceived} decoded frame${secSigFramesReceived === 1 ? "" : "s"} (${secSigRawFramesReceived} raw); jamming detection ${jamEnabled ? "on" : "off"}, ${jamNames[jamState] || jamState}; spoof detection ${spoofEnabled ? "on" : "off"}, ${spoofNames[spoofState] || spoofState}; jammed frequencies ${jammedFrequencies.length ? jammedFrequencies.map((value) => `${(value / 1e6).toFixed(3)} MHz`).join(", ") : "none"}.`;
-    signalsEmpty.hidden = true; if (!replayRebuilding) drawSignals();
+    signalsEmpty.hidden = true; if (!replayRebuilding) scheduleSignalDraw();
   }
 
   function parseSecSigLog(payload) {
@@ -2083,7 +2116,7 @@
       const epoch = signalSampleEpoch(new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(0, true));
       recordSignalComputerTime(epoch);
       if (messageClass === 0x01 && [0x07, 0x21].includes(messageId)) recordSignalUtc(payload, messageId);
-      if (signalEpoch.latest !== previousEpoch && !replayRebuilding) drawSignals();
+      if (signalEpoch.latest !== previousEpoch && !replayRebuilding) scheduleSignalDraw();
     }
     if (messageClass === 0x0a && messageId === 0x36) {
       parseMonCommsTx(payload);
@@ -2176,11 +2209,20 @@
     const sample = receiverTxSample;
     const stale = sample && !replayData && Date.now() - sample.receivedAt > 3000;
     const percent = (value) => value <= 100 ? `${value}%` : "n/a";
+    const highUartPorts = [];
     for (const [id, name, element] of receiverTxPorts) {
       const port = sample?.ports.get(id);
+      const validUsage = Number.isFinite(port?.usage) && port.usage >= 0 && port.usage <= 100;
+      const baudWarning = id !== 0x0300 && validUsage && port.usage > 90 && !replayData;
+      if (baudWarning) highUartPorts.push(`${name} TX ${port.usage}%`);
+      const severity = !validUsage ? "" : port.usage > 95 ? "critical" : port.usage > 90 ? "warning" : "normal";
+      element.classList?.toggle("status-tx-normal", severity === "normal");
+      element.classList?.toggle("status-tx-warning", severity === "warning");
+      element.classList?.toggle("status-tx-critical", severity === "critical");
       element.textContent = `${name} TX: ${port ? `${percent(port.usage)} (${port.pending} B)` : "--"}${stale && port ? " (stale)" : ""}`;
-      element.title = port ? `${replayData ? "Recorded" : "Receiver"} MON-COMMS: maximum TX buffer occupancy in last monitoring period ${percent(port.usage)}; peak ${percent(port.peak)}; pending ${port.pending} bytes; total transmitted ${port.bytes} bytes${port.overruns !== null ? `; RX overrun timeslots ${port.overruns}` : ""}${port.skipped !== null ? `; skipped bytes ${port.skipped}` : ""}${stale ? "; no update for over 3 seconds" : ""}` : sample ? `${name} is not reported by MON-COMMS` : "Waiting for receiver MON-COMMS telemetry";
+      element.title = port ? `${replayData ? "Recorded" : "Receiver"} MON-COMMS: maximum TX buffer occupancy in last monitoring period ${percent(port.usage)}; peak ${percent(port.peak)}; pending ${port.pending} bytes; total transmitted ${port.bytes} bytes${baudWarning ? "; tip: raise the UART baud rate in Settings" : ""}${port.overruns !== null ? `; RX overrun timeslots ${port.overruns}` : ""}${port.skipped !== null ? `; skipped bytes ${port.skipped}` : ""}${stale ? "; no update for over 3 seconds" : ""}` : sample ? `${name} is not reported by MON-COMMS` : "Waiting for receiver MON-COMMS telemetry";
     }
+    setReceiverTxWarning(highUartPorts.length ? `${highUartPorts.join(" and ")} above 90%: increase baud rate in Settings${stale ? " (MON-COMMS telemetry stale)" : ""}` : "");
     renderSystemStatsIndicator();
   }
 
@@ -2299,8 +2341,7 @@
       while (signalHistory.pga.length <= index) signalHistory.pga.push([]);
       appendHistory(signalHistory.pga[index], { epoch, value: pga });
     }
-    if (signalHistory.pga.length && !replayRebuilding) drawSignals();
-    if (!replayRebuilding) setStatus(`Receiving MON-SPAN: ${usable} RF block${usable === 1 ? "" : "s"}`);
+    if (signalHistory.pga.length && !replayRebuilding) scheduleSignalDraw();
   }
 
   function ubxFrame(messageClass, messageId, payload) { const bytes = new Uint8Array(payload.length + 8); bytes.set([0xb5, 0x62, messageClass, messageId, payload.length & 0xff, payload.length >> 8]); bytes.set(payload, 6); const [a, b] = checksum(bytes.slice(2, -2)); bytes[bytes.length - 2] = a; bytes[bytes.length - 1] = b; return bytes; }
@@ -2490,6 +2531,8 @@
     configureButton.disabled = true;
     try {
       const requests = [
+        ["UART1 baud rate", 0x40520001, settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value], 4],
+        ["UART2 baud rate", 0x40530001, settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value], 4],
         ["UART1 NMEA output off", 0x10740002, 0, 4],
         ["Measurement rate 1 Hz", 0x30210001, 1000, 2],
         ["Navigation rate", 0x30210002, 1, 2],
@@ -2528,11 +2571,14 @@
       const results = [];
       for (const [name, key, value, valueBytes] of receiverInterfaceRequests(requests, settings.configureAllInterfaces)) results.push({ name, result: await sendValset(name, key, value, valueBytes) });
       trustedClockSample = null;
-      osnmaTrustedTimeStatus.textContent = "Configuration updated; send trusted UTC explicitly when ready.";
+      osnmaTrustedTimeStatus.textContent = osnmaClockSettings.useComputerClock
+        ? "Trusted-time requirement configured; click Send trusted time to send computer UTC."
+        : "Trusted UTC requirement is off; click Send trusted time to enable it and send UTC.";
       showConfigResults(results);
       startSecSigPolling();
       setStatus(`Configuration completed for ${receiver.value.toUpperCase()}; waiting for NAV and monitoring data`);
-    } catch (error) { setStatus(`Configuration failed: ${error.message}`); }
+      return results;
+    } catch (error) { setStatus(`Configuration failed: ${error.message}`); return null; }
     finally { configureButton.disabled = false; refreshLocalClock(); }
   }
 
@@ -2546,27 +2592,23 @@
     settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
   }
 
-  async function applyReceiverBaud(rate, target = "host") {
-    const key = { UART1: 0x40520001, UART2: 0x40530001 }[target];
-    if (target !== "host" && !key) throw new Error("Unknown baud-rate target");
+  async function applyReceiverBaud(rate) {
     if (!port || !writer) {
-      if (key) throw new Error(`Connect a receiver before changing ${target}`);
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
       return "saved";
     }
-    if (!key) {
-      await reconnectAtBaud(rate);
-      setStatus("USB/host port baud setting updated; receiver UART rates unchanged. Native USB throughput is independent of baud.");
-      return "host";
-    }
     configurationStatus.className = "configuration-light config-pending";
-    configurationTooltip.textContent = `Configuration: changing ${target} baud rate...`;
-    const result = await sendValset(`${target} baud rate`, key, rate, 4);
-    showConfigResults([{ name: `${target} baud rate`, result }]);
-    if (result !== "ack") throw new Error(`${target} baud rate change ${result}`);
+    configurationTooltip.textContent = "Configuration: changing UART1 and UART2 baud rates...";
+    const results = [];
+    for (const [name, key] of [["UART1", 0x40520001], ["UART2", 0x40530001]]) {
+      const result = await sendValset(`${name} baud rate`, key, rate, 4);
+      results.push({ name: `${name} baud rate`, result });
+      showConfigResults(results);
+      if (result !== "ack") throw new Error(`${name} baud rate change ${result}`);
+    }
     await reconnectAtBaud(rate);
-    setStatus(`${target} and host port set to ${rate.toLocaleString("en-US").replaceAll(",", " ")} baud`);
-    return result;
+    setStatus(`UART1, UART2 and host port set to ${rate.toLocaleString("en-US").replaceAll(",", " ")} baud`);
+    return "ack";
   }
 
   function defaultLogName() { return `ubx-${new Date().toISOString().replaceAll(":", "-").replace("T", "_").slice(0, 19)}.ubx`; }
@@ -2814,10 +2856,7 @@
       const rate = baud.value === "auto" ? await detectBaudRate(selectedPort) : Number(baud.value);
       await selectedPort.open({ baudRate: rate, bufferSize: 1 << 20 });
       port = selectedPort; writer = port.writable.getWriter(); reading = true;
-      resetLocalClock();
-      resetSatelliteReports();
-      resetPositionComparison();
-      receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx();
+      resetLiveConnectionState();
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
       connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); pollReceiverFirmware(); await detectReceiverInterface(); await configureMonSpan(); setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
     } catch (error) { setStatus(`Connection failed: ${error.message}`); }
@@ -2965,7 +3004,7 @@
     nextSettings.lastReceiver = receiver.value;
     const mapThemeChanged = nextSettings.darkMap !== settings.darkMap;
     settings = nextSettings; applyCompactMode(); resetTraceBuffers(); if (durationChanged && blockCount) buildBlocks(blockCount); else if (markerIntervalChanged) blockViews.forEach((view) => { view.timestampMarkers = []; view.lastMarkerSlot = null; }); if (mapThemeChanged) updateMapTiles(); saveSettings(); renderOsnma(); renderHasDiagnostics(); refreshLocalClock(); if (positionSourceChanged) resetPositionSourceDisplay();
-    try { if (nextBaud !== currentBaud || receiverBaudTarget.value !== "host") await applyReceiverBaud(nextBaud, receiverBaudTarget.value); if ((interfacesChanged || gnssFeaturesChanged) && writer) await configureMonSpan(); settingsDialog.close(); }
+    try { if (nextBaud !== currentBaud) await applyReceiverBaud(nextBaud); if ((interfacesChanged || gnssFeaturesChanged) && writer) await configureMonSpan(); settingsDialog.close(); }
     catch (error) { setStatus(`Baud change failed: ${error.message}`); }
   });
   navigator.serial?.addEventListener("disconnect", () => { if (port) disconnect(); });

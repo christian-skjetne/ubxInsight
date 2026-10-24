@@ -157,18 +157,18 @@
         <summary>Trusted time configuration</summary>
         <div class="osnma-clock-controls">
           <div class="osnma-clock-row">
-            <button id="osnma-send-trusted-time" type="button" class="secondary" disabled title="Send the current computer UTC and stated uncertainty to the connected receiver."><span class="material-symbols-outlined" aria-hidden="true">schedule_send</span>Send trusted time</button>
-            <span id="osnma-trusted-time-status" role="status" aria-live="polite">Connect a receiver to send trusted UTC.</span>
+            <button id="osnma-send-trusted-time" type="button" class="secondary" disabled title="Enable the receiver's trusted-time requirement, apply configuration, and send computer UTC with its stated uncertainty."><span class="material-symbols-outlined" aria-hidden="true">schedule_send</span>Send trusted time</button>
+            <span id="osnma-trusted-time-status" role="status" aria-live="polite">Connect a receiver, then click Send trusted time to enable the OSNMA requirement and send computer UTC.</span>
           </div>
           <div class="osnma-clock-row">
             <button id="osnma-update-local-time" type="button" class="secondary" disabled title="Add the last passed OSNMA time difference to app UTC and send adjusted UTC as trusted time. Requires a new check after accepted assistance. Windows time is unchanged."><span class="material-symbols-outlined" aria-hidden="true">update</span>Apply OSNMA offset &amp; resend trusted UTC</button>
             <span id="osnma-local-time" role="status">Local UTC: --</span>
           </div>
           <div class="osnma-clock-options">
-            <label class="osnma-clock-toggle"><input id="osnma-trust-computer-clock" type="checkbox"> Require trusted computer UTC for OSNMA</label>
+            <label class="osnma-clock-toggle"><input id="osnma-trust-computer-clock" type="checkbox"> Require receiver-validated trusted UTC for OSNMA</label>
             <label class="osnma-clock-accuracy">Reported uncertainty<input id="osnma-clock-accuracy" type="number" min="1" max="60" step="1" value="1" aria-label="Computer UTC uncertainty in seconds"> seconds</label>
           </div>
-          <p>Enable the receiver’s strict OSNMA time-sync requirement only if this computer’s UTC is independently synchronized and within the stated uncertainty. This setting does not send time; use Send trusted time to send computer UTC. When off, the strict requirement is disabled.</p>
+          <p>This preference requires independently synchronized computer UTC within the stated uncertainty. Click Send trusted time to apply the requirement to the receiver and send UTC. Selecting the checkbox alone does not change receiver configuration; when unchecked, use Send config to disable the requirement.</p>
         </div>
       </details>
       <section class="osnma-clock-display" aria-labelledby="osnma-clock-heading">
@@ -264,7 +264,6 @@
         <label class="setting">Peak decay (dB per frame)<input id="peak-decay" type="number" min="0" max="30" step="0.1"></label>
         <label class="toggle"><input id="dark-map" type="checkbox"> Use dark map theme</label>
         <label class="toggle"><input id="configure-all-interfaces" type="checkbox"> Configure UART1, UART2 and USB</label>
-        <label class="setting">Baud-rate target<select id="receiver-baud-target" title="USB/host only leaves receiver UARTs unchanged. UART targets configure that receiver UART and reopen the host port at the selected rate. Native USB has no UART baud limit."><option value="host">USB / host port only</option><option value="UART1">UART1 + host port</option><option value="UART2">UART2 + host port</option></select></label>
         <label class="setting">Baud rate<select id="receiver-baud"><option value="9600">9 600</option><option value="19200">19 200</option><option value="38400">38 400</option><option value="57600">57 600</option><option value="115200">115 200</option><option value="230400">230 400</option><option value="460800">460 800</option><option value="921600">921 600</option><option value="1000000">1 000 000</option><option value="1500000">1 500 000</option><option value="2000000">2 000 000</option><option value="3000000">3 000 000</option><option value="4000000">4 000 000</option><option value="6000000">6 000 000</option><option value="8000000">8 000 000</option></select></label>
         <label class="setting">Waterfall duration (minutes)<input id="waterfall-minutes" type="number" min="5" max="30" step="1"></label>
         <label class="setting">Waterfall timestamp interval (minutes)<input id="waterfall-marker-minutes" type="number" min="1" max="10" step="1"></label>

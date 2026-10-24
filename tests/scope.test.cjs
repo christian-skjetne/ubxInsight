@@ -9,7 +9,7 @@ const monCommsProbe = fs.existsSync(monCommsProbePath) ? require(monCommsProbePa
 const source = fs.readFileSync(path.join(__dirname, "..", "insight.js"), "utf8").replace(/\r\n/g, "\n");
 
 function loadFunctions(names, globals) {
-  const context = vm.createContext(globals);
+  const context = vm.createContext({ SIGNAL_TOW_DISCONTINUITY_MS: 10000, requestAnimationFrame(callback) { callback(); }, scheduleSignalDraw() { globals.drawSignals?.(); }, ...globals });
   const functions = names.map((name) => {
     const declaration = new RegExp(`  (?:async )?function ${name}\\(`).exec(source);
     const start = declaration?.index ?? -1;
@@ -282,6 +282,63 @@ test("shared signal epochs preserve missing seconds, duplicates, late arrival an
   assert.equal(context.signalEpoch.latest, 4);
   assert.equal(context.signalSampleEpoch(2000), 5);
   assert.equal(context.signalSampleEpoch(NaN), 5);
+});
+
+test("signal timeline rebases on receiver time-of-week resets", () => {
+  const signalEpoch = { latest: null, tow: null, clocks: new Map([[1, 123]]), computerClocks: new Map([[1, 456]]) };
+  const marker = {};
+  const signalHover = new WeakMap([[marker, 1]]);
+  const signalHoverPinned = new WeakSet([marker]);
+  const context = loadFunctions(["signalSampleEpoch"], { signalEpoch, signalHover, signalHoverPinned });
+  assert.equal(context.signalSampleEpoch(50000), 1);
+  assert.equal(context.signalSampleEpoch(51000), 2);
+  assert.equal(context.signalSampleEpoch(0), 4);
+  assert.equal(context.signalSampleEpoch(1000), 5);
+  assert.equal(signalEpoch.clocks.size, 0);
+  assert.equal(signalEpoch.computerClocks.size, 0);
+  assert.equal(context.signalHover.has(marker), false);
+  assert.equal(context.signalHoverPinned.has(marker), false);
+});
+
+test("signal redraw requests coalesce within an animation frame", () => {
+  let scheduled;
+  let redraws = 0;
+  const context = loadFunctions(["scheduleSignalDraw"], {
+    signalDrawQueued: false,
+    requestAnimationFrame(callback) { scheduled = callback; },
+    drawSignals() { redraws += 1; },
+  });
+  context.scheduleSignalDraw();
+  context.scheduleSignalDraw();
+  assert.equal(redraws, 0);
+  scheduled();
+  assert.equal(redraws, 1);
+});
+
+test("status tooltip tracks the full visible message", () => {
+  const status = { textContent: "", title: "", classList: { toggle() {} } };
+  const context = loadFunctions(["renderStatusMessage"], {
+    status,
+    statusMessage: "Connected at 38 400; waiting for UBX data",
+    receiverTxWarningMessage: "UART1 TX 98% above 90%: increase baud rate in Settings (MON-COMMS telemetry stale)",
+  });
+  context.renderStatusMessage();
+  assert.equal(status.title, status.textContent);
+  assert.match(status.title, /MON-COMMS telemetry stale/);
+  context.receiverTxWarningMessage = "";
+  context.renderStatusMessage();
+  assert.equal(status.title, "Connected at 38 400; waiting for UBX data");
+});
+
+test("live reconnect clears partial UBX frames and resets derived graph state", () => {
+  let resetMaps;
+  const context = loadFunctions(["resetLiveConnectionState"], {
+    receiveBuffer: new Uint8Array([0xb5, 0x62, 0x01]),
+    resetReplayDerivedViews(removeMaps) { resetMaps = removeMaps; },
+  });
+  context.resetLiveConnectionState();
+  assert.equal(context.receiveBuffer.length, 0);
+  assert.equal(resetMaps, false);
 });
 
 test("all signal chart windows advance together despite missing reports and constellation filtering", () => {
@@ -694,14 +751,25 @@ test("MON-SYS reports receiver CPU and memory with peaks and stale state", () =>
 
 test("MON-COMMS displays only serial TX queues, handles short records and marks stale telemetry", () => {
   let now = 10000;
-  const uart1 = {}; const uart2 = {}; const usb = {};
+  const makeElement = () => ({ classes: new Set(), classList: { toggle(name, enabled) { if (enabled) this.owner.classes.add(name); else this.owner.classes.delete(name); } } });
+  const uart1 = makeElement(); const uart2 = makeElement(); const usb = makeElement();
+  const status = makeElement();
+  status.textContent = "Receiving MON-SPAN: 3 RF blocks";
+  let baseStatus = status.textContent;
+  let warningMessage = "";
+  for (const element of [uart1, uart2, usb]) element.classList.owner = element;
+  status.classList.owner = status;
   const context = loadFunctions(["parseMonCommsTx", "renderReceiverTx", "replayFrameGroup"], {
     receiverTxPorts: [[0x0100, "UART1", uart1], [0x0200, "UART2", uart2], [0x0300, "USB", usb]],
+    status,
+    setReceiverTxWarning(message) { warningMessage = message; status.textContent = warningMessage || baseStatus; status.classList.toggle("status-tx-warning", Boolean(warningMessage)); },
+    setStatus(message) { baseStatus = message; status.textContent = warningMessage || baseStatus; },
     receiverTxSample: null, replayData: null, replayRebuilding: false, Date: { now: () => now },
     renderSystemStatsIndicator() {},
   });
   context.renderReceiverTx();
   assert.equal(usb.textContent, "USB TX: --");
+  assert.equal(status.textContent, "Receiving MON-SPAN: 3 RF blocks");
   const payload = new Uint8Array(8 + 5 * 40);
   payload[1] = 5;
   const data = new DataView(payload.buffer);
@@ -719,15 +787,35 @@ test("MON-COMMS displays only serial TX queues, handles short records and marks 
   assert.equal(context.receiverTxSample.ports.size, 3);
   assert.equal(uart1.textContent, "UART1 TX: 20% (100 B)");
   assert.equal(uart2.textContent, "UART2 TX: 98% (200 B)");
+  assert.equal(uart2.classes.has("status-tx-critical"), true);
+  assert.equal(status.textContent, "UART2 TX 98% above 90%: increase baud rate in Settings");
+  assert.match(uart2.title, /raise the UART baud rate in Settings/);
   assert.equal(usb.textContent, "USB TX: 3% (300 B)");
   assert.match(usb.title, /peak 100%.*total transmitted 123456 bytes.*RX overrun timeslots 4.*skipped bytes 12/);
+  context.setStatus("Receiving MON-SPAN: 3 RF blocks");
+  assert.match(status.textContent, /UART2 TX 98%/);
+  assert.equal(status.classes.has("status-tx-warning"), true);
+  now += 4000;
+  context.renderReceiverTx();
+  assert.match(status.textContent, /UART2 TX 98%.*MON-COMMS telemetry stale/);
+  assert.equal(uart2.classes.has("status-tx-critical"), true);
+  baseStatus = "Connected at 38 400; waiting for UBX data";
+  data.setUint8(8 + 2 * 40 + 8, 95);
+  context.parseMonCommsTx(payload);
+  assert.equal(uart2.classes.has("status-tx-warning"), true);
+  assert.equal(uart2.classes.has("status-tx-critical"), false);
+  data.setUint8(8 + 2 * 40 + 8, 90);
+  context.parseMonCommsTx(payload);
+  assert.equal(uart2.classes.has("status-tx-normal"), true);
+  assert.equal(uart2.classes.has("status-tx-warning"), false);
   now += 4000;
   context.renderReceiverTx();
   assert.match(usb.textContent, /\(stale\)/);
+  assert.equal(status.textContent, "Connected at 38 400; waiting for UBX data");
   for (const invalid of [new Uint8Array(7), new Uint8Array(8), payload.subarray(0, payload.length - 1)]) context.parseMonCommsTx(invalid);
   payload[0] = 1;
   context.parseMonCommsTx(payload);
-  assert.equal(context.receiverTxSample.receivedAt, 10000);
+  assert.equal(context.receiverTxSample.receivedAt, 14000);
   context.replayData = payload;
   context.renderReceiverTx();
   assert.equal(usb.textContent, "USB TX: 3% (300 B)");
@@ -1142,7 +1230,7 @@ test("NAV-SAT HAS correction flags count GPS and Galileo independently", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(context.parseHasCorrectionCounts(new Uint8Array(7)))), null);
 });
 
-test("baud changes target USB/host only by default and require explicit UART selection", async () => {
+test("baud changes configure both UARTs and reopen the host at the same rate", async () => {
   const writes = []; const reconnects = [];
   const context = loadFunctions(["applyReceiverBaud"], {
     port: {}, writer: {}, settings: { baudByReceiver: {} }, receiver: { value: "x20" }, baud: {},
@@ -1150,19 +1238,13 @@ test("baud changes target USB/host only by default and require explicit UART sel
     async sendValset(...args) { writes.push(args); return "ack"; },
     async reconnectAtBaud(rate) { reconnects.push(rate); },
   });
-  assert.equal(await context.applyReceiverBaud(4000000), "host");
-  assert.equal(writes.length, 0);
+  assert.equal(await context.applyReceiverBaud(4000000), "ack");
+  assert.deepEqual(writes, [["UART1 baud rate", 0x40520001, 4000000, 4], ["UART2 baud rate", 0x40530001, 4000000, 4]]);
   assert.deepEqual(reconnects, [4000000]);
-  await context.applyReceiverBaud(115200, "UART1");
-  await context.applyReceiverBaud(921600, "UART2");
-  assert.deepEqual(writes, [["UART1 baud rate", 0x40520001, 115200, 4], ["UART2 baud rate", 0x40530001, 921600, 4]]);
-  assert.deepEqual(reconnects, [4000000, 115200, 921600]);
   context.sendValset = async () => "nak";
-  await assert.rejects(context.applyReceiverBaud(4000000, "UART2"), /UART2 baud rate change nak/);
-  assert.equal(reconnects.length, 3);
-  await assert.rejects(context.applyReceiverBaud(115200, "USB"), /Unknown baud-rate target/);
+  await assert.rejects(context.applyReceiverBaud(921600), /UART1 baud rate change nak/);
+  assert.equal(reconnects.length, 1);
   context.port = null; context.writer = null;
-  await assert.rejects(context.applyReceiverBaud(115200, "UART1"), /Connect a receiver/);
   assert.equal(await context.applyReceiverBaud(115200), "saved");
   assert.equal(context.settings.baudByReceiver.x20, 115200);
 });
@@ -1301,13 +1383,15 @@ test("receiver configuration enables NAV-DOP and X20 NAV2-DOP at one epoch per r
   const requests = [];
   const context = loadFunctions(["configureMonSpan", "receiverInterfaceRequests", "gnssFeatureConfigurationRequests", "receiverMonitoringConfigurationRequests"], {
     writer: {}, configureButton: {}, receiver: { value: "x20" },
-    settings: { configureAllInterfaces: true, enableOsnma: false, enableGalHas: false },
+    settings: { configureAllInterfaces: true, enableOsnma: false, enableGalHas: false, baudByReceiver: { x20: 38400, f9p: 115200 } },
     osnmaClockSettings: { useComputerClock: false }, configurationStatus: { setAttribute() {} }, configurationTooltip: {},
     trustedClockSample: null, osnmaTrustedTimeStatus: {}, showConfigResults() {}, startSecSigPolling() {}, refreshLocalClock() {},
     setStatus(message) { assert.doesNotMatch(message, /failed/i); },
     async sendValset(...request) { requests.push(request); return "ack"; },
   });
   await context.configureMonSpan();
+  assert.ok(requests.some(([name, key, rate, size]) => name === "UART1 baud rate" && key === 0x40520001 && rate === 38400 && size === 4));
+  assert.ok(requests.some(([name, key, rate, size]) => name === "UART2 baud rate" && key === 0x40530001 && rate === 38400 && size === 4));
   assert.ok(requests.some(([name, key, rate, size]) => name === "NAV-DOP UART1" && key === 0x20910039 && rate === 1 && size === 1));
   assert.ok(requests.some(([name, key, rate]) => name === "NAV-DOP USB" && key === 0x2091003b && rate === 1));
   assert.ok(requests.some(([name, key, rate]) => name === "NAV2-DOP USB" && key === 0x20910468 && rate === 1));
@@ -1769,22 +1853,26 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   assert.equal(context.osnmaUpdateLocalTime.disabled, true);
 });
 
-test("trusted UTC is sent only by explicit action after opt-in", async () => {
-  let sendCount = 0;
+test("Send trusted time enables the requirement, configures the receiver, then sends UTC", async () => {
+  const events = [];
   const context = loadFunctions(["sendTrustedTimeNow"], {
     settings: { enableOsnma: true },
     osnmaClockSettings: { useComputerClock: false },
     osnmaTrustedTimeStatus: {}, configureButton: { disabled: false },
     writer: {}, reading: true, replayData: null, liveConnectionId: 1,
-    async sendTrustedClockTime() { sendCount += 1; return { accepted: true }; },
+    syncOsnmaClockForm() {}, saveOsnmaClockSettings() {},
+    async configureMonSpan() { events.push("configure"); return [{ name: "Require trusted computer time", result: "ack" }]; },
+    async sendTrustedClockTime() { events.push("trusted UTC"); return { accepted: true }; },
   });
   await context.sendTrustedTimeNow();
-  assert.equal(sendCount, 0);
-  assert.match(context.osnmaTrustedTimeStatus.textContent, /Enable/);
-  context.osnmaClockSettings.useComputerClock = true;
-  await context.sendTrustedTimeNow();
-  assert.equal(sendCount, 1);
+  assert.equal(context.osnmaClockSettings.useComputerClock, true);
+  assert.deepEqual(events, ["configure", "trusted UTC"]);
   assert.match(context.osnmaTrustedTimeStatus.textContent, /accepted/);
+  context.configureMonSpan = async () => [{ name: "Require trusted computer time", result: "nak" }];
+  events.length = 0;
+  await context.sendTrustedTimeNow();
+  assert.deepEqual(events, []);
+  assert.match(context.osnmaTrustedTimeStatus.textContent, /not acknowledged/);
 });
 
 test("OSNMA correction waits for a new check cycle after each accepted trusted UTC sample", () => {
