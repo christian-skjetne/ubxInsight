@@ -56,7 +56,7 @@ test("compact mode applies and removes the layout class", () => {
 });
 
 test("legacy settings use enabled map and interface defaults and preserve explicit choices", () => {
-  const defaults = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
+  const defaults = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "x20", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const context = loadFunctions(["loadSettings"], {
     DEFAULT_SETTINGS: defaults,
     SETTINGS_KEY: "settings",
@@ -78,6 +78,13 @@ test("legacy settings use enabled map and interface defaults and preserve explic
   const explicitSettings = explicitContext.loadSettings();
   assert.equal(explicitSettings.configureAllInterfaces, false);
   assert.equal(explicitSettings.darkMap, false);
+  assert.equal(explicitSettings.lastReceiver, "x20");
+  const f9pContext = loadFunctions(["loadSettings"], {
+    DEFAULT_SETTINGS: defaults,
+    SETTINGS_KEY: "settings",
+    localStorage: { getItem: () => JSON.stringify({ lastReceiver: "f9p" }) },
+  });
+  assert.equal(f9pContext.loadSettings().lastReceiver, "f9p");
 });
 
 test("position-source setting keeps NAV2 preference for X20 but falls back to NAV on F9P", () => {
