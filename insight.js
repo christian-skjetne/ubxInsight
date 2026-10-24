@@ -10,7 +10,7 @@
   const LIGHT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
   const SETTINGS_KEY = "ubx-scope-settings-v1";
   const OSNMA_CLOCK_SETTINGS_KEY = "ubx-scope-osnma-clock-v1";
-  const DEFAULT_SETTINGS = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
+  const DEFAULT_SETTINGS = { compactMode: false, configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const DEFAULT_OSNMA_CLOCK_SETTINGS = { useComputerClock: false, accuracySeconds: 1, showLocalTime: false };
   const SPECTRUM_MIN_DB = 0;
   const SPECTRUM_MAX_DB = 240;
@@ -168,6 +168,7 @@
   const hasNav2Count = document.querySelector("#has-nav2-count");
   const hasNav2Engine = document.querySelector("#has-nav2-engine");
   const osnmaDisabledBanner = document.querySelector("#osnma-disabled-banner");
+  const compactMode = document.querySelector("#compact-mode");
   const showAverage = document.querySelector("#show-average");
   const averageFrames = document.querySelector("#average-frames");
   const showPeak = document.querySelector("#show-peak");
@@ -223,6 +224,7 @@
   let viewDrawQueued = false;
   const viewsPendingDraw = new Set();
   let settings = loadSettings();
+  applyCompactMode();
   let osnmaClockSettings = loadOsnmaClockSettings();
   let positionFixes = [];
   const hasCorrectionReports = { NAV: null, NAV2: null };
@@ -256,7 +258,7 @@
       if (!saved || typeof saved !== "object") return { ...DEFAULT_SETTINGS };
       const baudByReceiver = { ...DEFAULT_SETTINGS.baudByReceiver, ...(saved.baudByReceiver || {}) };
       for (const receiverName of Object.keys(baudByReceiver)) baudByReceiver[receiverName] = Number(baudByReceiver[receiverName]) || DEFAULT_SETTINGS.baudByReceiver[receiverName];
-      return { configureAllInterfaces: typeof saved.configureAllInterfaces === "boolean" ? saved.configureAllInterfaces : DEFAULT_SETTINGS.configureAllInterfaces, enableOsnma: typeof saved.enableOsnma === "boolean" ? saved.enableOsnma : DEFAULT_SETTINGS.enableOsnma, enableGalHas: typeof saved.enableGalHas === "boolean" ? saved.enableGalHas : DEFAULT_SETTINGS.enableGalHas, positionSource: saved.positionSource === "NAV2" ? "NAV2" : DEFAULT_SETTINGS.positionSource, showAverage: typeof saved.showAverage === "boolean" ? saved.showAverage : DEFAULT_SETTINGS.showAverage, averageFrames: Math.max(1, Math.min(120, Number(saved.averageFrames) || DEFAULT_SETTINGS.averageFrames)), showPeak: typeof saved.showPeak === "boolean" ? saved.showPeak : DEFAULT_SETTINGS.showPeak, peakDecay: Math.max(0, Math.min(30, Number(saved.peakDecay) || 0)), darkMap: typeof saved.darkMap === "boolean" ? saved.darkMap : DEFAULT_SETTINGS.darkMap, waterfallMinutes: Math.max(5, Math.min(30, Number(saved.waterfallMinutes) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(saved.waterfallMarkerMinutes) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), lastReceiver: saved.lastReceiver === "x20" ? "x20" : "f9p", baudByReceiver };
+      return { compactMode: saved.compactMode === true, configureAllInterfaces: typeof saved.configureAllInterfaces === "boolean" ? saved.configureAllInterfaces : DEFAULT_SETTINGS.configureAllInterfaces, enableOsnma: typeof saved.enableOsnma === "boolean" ? saved.enableOsnma : DEFAULT_SETTINGS.enableOsnma, enableGalHas: typeof saved.enableGalHas === "boolean" ? saved.enableGalHas : DEFAULT_SETTINGS.enableGalHas, positionSource: saved.positionSource === "NAV2" ? "NAV2" : DEFAULT_SETTINGS.positionSource, showAverage: typeof saved.showAverage === "boolean" ? saved.showAverage : DEFAULT_SETTINGS.showAverage, averageFrames: Math.max(1, Math.min(120, Number(saved.averageFrames) || DEFAULT_SETTINGS.averageFrames)), showPeak: typeof saved.showPeak === "boolean" ? saved.showPeak : DEFAULT_SETTINGS.showPeak, peakDecay: Math.max(0, Math.min(30, Number(saved.peakDecay) || 0)), darkMap: typeof saved.darkMap === "boolean" ? saved.darkMap : DEFAULT_SETTINGS.darkMap, waterfallMinutes: Math.max(5, Math.min(30, Number(saved.waterfallMinutes) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(saved.waterfallMarkerMinutes) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), lastReceiver: saved.lastReceiver === "x20" ? "x20" : "f9p", baudByReceiver };
     } catch { return { ...DEFAULT_SETTINGS }; }
   }
 
@@ -293,7 +295,10 @@
     positionSourceSelect.title = receiver.value === "x20" ? "Choose which X20 navigation solution drives the live position display." : "The selected F9P provides the primary NAV solution only.";
     positionSourceNote.hidden = receiver.value === "x20";
   }
-  function syncSettingsForm() { configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaudTarget.value = "host"; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
+  function applyCompactMode() {
+    document.body.classList.toggle("compact-mode", settings.compactMode);
+  }
+  function syncSettingsForm() { compactMode.checked = settings.compactMode; configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaudTarget.value = "host"; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
   function resetTraceBuffers() { blockViews.forEach((view) => { view.averageHistory = []; view.peak = null; }); }
   function resetWaterfallHistory() {
     blockViews.forEach((view) => {
@@ -2943,7 +2948,7 @@
   });
   window.addEventListener("resize", positionSystemStats);
   settingsClose.addEventListener("click", () => settingsDialog.close());
-  settingsReset.addEventListener("click", () => { const sourceChanged = settings.positionSource !== DEFAULT_SETTINGS.positionSource; Object.assign(settings, DEFAULT_SETTINGS); syncSettingsForm(); renderOsnma(); renderHasDiagnostics(); if (sourceChanged) resetPositionSourceDisplay(); });
+  settingsReset.addEventListener("click", () => { const sourceChanged = settings.positionSource !== DEFAULT_SETTINGS.positionSource; Object.assign(settings, DEFAULT_SETTINGS); applyCompactMode(); syncSettingsForm(); renderOsnma(); renderHasDiagnostics(); if (sourceChanged) resetPositionSourceDisplay(); });
   enableOsnma.addEventListener("change", updateGnssIntegritySettingsForm);
   enableGalHas.addEventListener("change", updateGnssIntegritySettingsForm);
   settingsForm.addEventListener("submit", async (event) => {
@@ -2954,12 +2959,12 @@
     const nextPositionSource = receiver.value === "x20" ? positionSourceSelect.value : settings.positionSource;
     const positionSourceChanged = nextPositionSource !== settings.positionSource;
     const currentBaud = settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value];
-    const nextSettings = { enableOsnma: enableOsnma.checked, enableGalHas: enableGalHas.checked, positionSource: nextPositionSource, showAverage: showAverage.checked, averageFrames: Math.max(1, Math.min(120, Number(averageFrames.value) || DEFAULT_SETTINGS.averageFrames)), showPeak: showPeak.checked, peakDecay: Math.max(0, Math.min(30, Number(peakDecay.value) || 0)), darkMap: darkMap.checked, waterfallMinutes: Math.max(5, Math.min(30, Number(waterfallMinutes.value) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(waterfallMarkerMinutes.value) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), baudByReceiver: { ...settings.baudByReceiver } };
+    const nextSettings = { compactMode: compactMode.checked, enableOsnma: enableOsnma.checked, enableGalHas: enableGalHas.checked, positionSource: nextPositionSource, showAverage: showAverage.checked, averageFrames: Math.max(1, Math.min(120, Number(averageFrames.value) || DEFAULT_SETTINGS.averageFrames)), showPeak: showPeak.checked, peakDecay: Math.max(0, Math.min(30, Number(peakDecay.value) || 0)), darkMap: darkMap.checked, waterfallMinutes: Math.max(5, Math.min(30, Number(waterfallMinutes.value) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(waterfallMarkerMinutes.value) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), baudByReceiver: { ...settings.baudByReceiver } };
     const markerIntervalChanged = nextSettings.waterfallMarkerMinutes !== settings.waterfallMarkerMinutes; const durationChanged = nextSettings.waterfallMinutes !== settings.waterfallMinutes; const blockCount = blockViews.length;
     nextSettings.configureAllInterfaces = configureAllInterfaces.checked;
     nextSettings.lastReceiver = receiver.value;
     const mapThemeChanged = nextSettings.darkMap !== settings.darkMap;
-    settings = nextSettings; resetTraceBuffers(); if (durationChanged && blockCount) buildBlocks(blockCount); else if (markerIntervalChanged) blockViews.forEach((view) => { view.timestampMarkers = []; view.lastMarkerSlot = null; }); if (mapThemeChanged) updateMapTiles(); saveSettings(); renderOsnma(); renderHasDiagnostics(); refreshLocalClock(); if (positionSourceChanged) resetPositionSourceDisplay();
+    settings = nextSettings; applyCompactMode(); resetTraceBuffers(); if (durationChanged && blockCount) buildBlocks(blockCount); else if (markerIntervalChanged) blockViews.forEach((view) => { view.timestampMarkers = []; view.lastMarkerSlot = null; }); if (mapThemeChanged) updateMapTiles(); saveSettings(); renderOsnma(); renderHasDiagnostics(); refreshLocalClock(); if (positionSourceChanged) resetPositionSourceDisplay();
     try { if (nextBaud !== currentBaud || receiverBaudTarget.value !== "host") await applyReceiverBaud(nextBaud, receiverBaudTarget.value); if ((interfacesChanged || gnssFeaturesChanged) && writer) await configureMonSpan(); settingsDialog.close(); }
     catch (error) { setStatus(`Baud change failed: ${error.message}`); }
   });

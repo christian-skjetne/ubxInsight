@@ -79,6 +79,12 @@ main { width: 100%; margin: 0; padding: 12px; }
 @media (max-width: 950px) { #satellite-views { grid-template-columns: minmax(0, 1fr); } #satellite-sky { max-height: 520px; } }
 #empty { padding: 60px 16px; color: var(--muted); text-align: center; }
 #blocks { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 12px; align-items: start; }
+body.compact-mode #blocks { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 8px; }
+body.compact-mode .block { min-width: 0; }
+body.compact-mode .block-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 6px 8px; }
+body.compact-mode .block-head .meta { grid-column: 1 / -1; grid-row: 2; overflow-wrap: anywhere; }
+body.compact-mode .block-head .graph-export-actions { grid-column: 2; grid-row: 1; }
+body.compact-mode .inspect-strip { padding-inline: 8px; }
 .block { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface); }
 .block-head { display: flex; align-items: baseline; gap: 14px; padding: 9px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .block-head h2 { margin: 0; font-size: 14px; }

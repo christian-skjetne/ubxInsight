@@ -32,6 +32,29 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+test("compact mode defaults off and preserves only boolean saved choices", () => {
+  for (const saved of [{}, { compactMode: true }, { compactMode: false }, { compactMode: "true" }]) {
+    const context = loadFunctions(["loadSettings"], {
+      DEFAULT_SETTINGS: { compactMode: false, baudByReceiver: {} }, SETTINGS_KEY: "settings",
+      localStorage: { getItem: () => JSON.stringify(saved) },
+    });
+    assert.equal(context.loadSettings().compactMode, saved.compactMode === true);
+  }
+});
+
+test("compact mode applies and removes the layout class", () => {
+  const classes = new Set();
+  const context = loadFunctions(["applyCompactMode"], {
+    settings: { compactMode: true },
+    document: { body: { classList: { toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); } } } },
+  });
+  context.applyCompactMode();
+  assert.equal(classes.has("compact-mode"), true);
+  context.settings.compactMode = false;
+  context.applyCompactMode();
+  assert.equal(classes.has("compact-mode"), false);
+});
+
 test("legacy settings use enabled map and interface defaults and preserve explicit choices", () => {
   const defaults = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "f9p", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const context = loadFunctions(["loadSettings"], {
