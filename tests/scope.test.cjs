@@ -9,7 +9,7 @@ const monCommsProbe = fs.existsSync(monCommsProbePath) ? require(monCommsProbePa
 const source = fs.readFileSync(path.join(__dirname, "..", "insight.js"), "utf8").replace(/\r\n/g, "\n");
 
 function loadFunctions(names, globals) {
-  const context = vm.createContext({ SIGNAL_TOW_DISCONTINUITY_MS: 10000, requestAnimationFrame(callback) { callback(); }, scheduleSignalDraw() { globals.drawSignals?.(); }, ...globals });
+  const context = vm.createContext({ SIGNAL_TOW_DISCONTINUITY_MS: 10000, latestAuthenticatedTimeCheck: null, lastAppliedAuthenticatedTimeCheck: null, requestAnimationFrame(callback) { callback(); }, scheduleSignalDraw() { globals.drawSignals?.(); }, ...globals });
   const functions = names.map((name) => {
     const declaration = new RegExp(`  (?:async )?function ${name}\\(`).exec(source);
     const start = declaration?.index ?? -1;
@@ -1796,19 +1796,22 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
     static now() { return 100000; }
   }
   const sample = { offsetMs: 0, connectionId: 1, awaitingCheck: false };
+  const passedCheck = { differenceMs: -513, status: 3, receivedAt: 99000, connectionId: 1, authenticated: true };
   const sent = [];
-  const context = loadFunctions(["canCorrectLocalClock", "refreshLocalClock", "updateLocalClock", "resetLocalClock", "osnmaCodeState", "buildTrustedComputerUtcPayload", "sendTrustedClockTime"], {
+  const context = loadFunctions(["localClockCorrectionBlockers", "canCorrectLocalClock", "refreshLocalClock", "updateLocalClock", "resetLocalClock", "osnmaCodeState", "buildTrustedComputerUtcPayload", "sendTrustedClockTime"], {
     Date: Clock, Uint8Array, DataView, settings: { enableOsnma: true }, port: {}, writer: {}, reading: true, replayData: null,
     latestReceiverUtc: null, latestOsnmaStatus: workingStatus(), liveConnectionId: 1,
     trustedClockSample: sample, trustedClockUpdatePending: false,
-    latestOsnmaTimeCheck: { differenceMs: -513, status: 3, receivedAt: 99000, trustedClockSample: sample, authenticated: true },
-    appClockOffsetMs: 0, osnmaUpdateLocalTime: {}, osnmaSendTrustedTime: {}, osnmaLocalTime: {}, clockOffset: {}, refreshOsnmaClock() {},
+    latestOsnmaTimeCheck: passedCheck, latestAuthenticatedTimeCheck: passedCheck, lastAppliedAuthenticatedTimeCheck: null,
+    appClockOffsetMs: 0, osnmaUpdateLocalTime: {}, osnmaUpdateLocalTimeTooltip: { title: "", dataset: {}, tabIndex: -1 }, osnmaUpdateLocalTimeRequirements: { textContent: "" }, osnmaSendTrustedTime: {}, osnmaLocalTime: {}, clockOffset: {}, refreshOsnmaClock() {},
     configureButton: { disabled: false },
     osnmaClockSettings: { accuracySeconds: 1 }, setStatus() {},
     async sendMgaAssistance(payload, messageId) { sent.push({ payload, messageId }); return { accepted: true }; },
   });
   context.settings.enableOsnma = false;
   assert.equal(context.canCorrectLocalClock(), false);
+  context.refreshLocalClock();
+  assert.match(context.osnmaUpdateLocalTimeTooltip.title, /Enable Galileo OSNMA in Settings/);
   context.settings.enableOsnma = true;
   const assistanceBefore = Array.from(context.buildTrustedComputerUtcPayload());
   assert.equal(context.canCorrectLocalClock(), true);
@@ -1818,6 +1821,8 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   await correction;
   assert.equal(context.appClockOffsetMs, -513);
   assert.equal(sent.length, 1);
+  assert.equal(context.osnmaUpdateLocalTime.disabled, true);
+  assert.match(context.osnmaUpdateLocalTimeTooltip.title, /already used/);
   assert.equal(sent[0].messageId, 0x40);
   assert.deepEqual(Array.from(sent[0].payload), Array.from(context.buildTrustedComputerUtcPayload(-513)));
   assert.equal(context.trustedClockSample.offsetMs, -513);
@@ -1825,12 +1830,13 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   await context.updateLocalClock();
   assert.equal(sent.length, 1);
   assert.deepEqual(Array.from(context.buildTrustedComputerUtcPayload()), assistanceBefore);
-  context.latestOsnmaTimeCheck = { differenceMs: 20, status: 3, receivedAt: 100000, trustedClockSample: context.trustedClockSample, authenticated: true };
+  context.latestOsnmaTimeCheck = { differenceMs: 20, status: 3, receivedAt: 100000, connectionId: 1, trustedClockSample: context.trustedClockSample, authenticated: true };
+  context.latestAuthenticatedTimeCheck = { differenceMs: 20, status: 3, receivedAt: 100000, connectionId: 1, authenticated: true };
   context.trustedClockSample.awaitingCheck = false;
   assert.equal(context.canCorrectLocalClock(), true);
   for (const changes of [{ timingAuthResult: 2 }, { teslaKeyAuthStatus: 2 }, { timSyncEnabled: 0 }, { timSyncStatus: 4 }, { timSyncStatus: 7 }, { cpks: 3 }, { pubKeyValid: 0 }, { receivedAt: 59999 }, { connectionId: 0 }, { satellites: [{ authStatus: 0 }] }]) {
     context.latestOsnmaStatus = { ...workingStatus(), ...changes };
-    assert.equal(context.canCorrectLocalClock(), false, JSON.stringify(changes));
+    assert.equal(context.canCorrectLocalClock(), true, JSON.stringify(changes));
   }
   context.latestOsnmaStatus = workingStatus();
   context.latestOsnmaTimeCheck.receivedAt = 59999;
@@ -1839,9 +1845,14 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   assert.equal(context.canCorrectLocalClock(), true);
   context.refreshLocalClock();
   assert.equal(context.osnmaUpdateLocalTime.disabled, false);
-  context.latestOsnmaTimeCheck.authenticated = false;
+  context.latestOsnmaTimeCheck = { differenceMs: 20, status: 4, receivedAt: 100000, connectionId: 1, trustedClockSample: context.trustedClockSample, authenticated: false };
+  assert.equal(context.canCorrectLocalClock(), true);
+  context.latestAuthenticatedTimeCheck.authenticated = false;
   assert.equal(context.canCorrectLocalClock(), false);
-  context.latestOsnmaTimeCheck.authenticated = true;
+  context.latestAuthenticatedTimeCheck.authenticated = true;
+  context.liveConnectionId = 2;
+  assert.equal(context.canCorrectLocalClock(), false);
+  context.liveConnectionId = 1;
   context.latestOsnmaStatus = workingStatus();
   context.latestOsnmaTimeCheck.receivedAt = 100000;
   context.replayData = {};
@@ -1849,7 +1860,8 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   context.replayData = null;
   await context.updateLocalClock();
   assert.equal(context.appClockOffsetMs, -493);
-  context.latestOsnmaTimeCheck = { differenceMs: 10, status: 3, receivedAt: 100000, trustedClockSample: context.trustedClockSample, authenticated: true };
+  context.latestOsnmaTimeCheck = { differenceMs: 10, status: 3, receivedAt: 100000, connectionId: 1, trustedClockSample: context.trustedClockSample, authenticated: true };
+  context.latestAuthenticatedTimeCheck = { differenceMs: 10, status: 3, receivedAt: 100000, connectionId: 1, authenticated: true };
   context.sendMgaAssistance = async () => ({ accepted: false, message: "receiver acknowledgement timed out" });
   await context.updateLocalClock();
   assert.equal(context.appClockOffsetMs, -493);
@@ -1857,6 +1869,7 @@ test("clock correction adds the OSNMA difference, resends UTC and consumes the c
   context.resetLocalClock();
   assert.equal(context.appClockOffsetMs, 0);
   assert.equal(context.latestReceiverUtc, null);
+  assert.equal(context.latestAuthenticatedTimeCheck, null);
   assert.equal(context.osnmaUpdateLocalTime.disabled, true);
 });
 
@@ -1885,7 +1898,7 @@ test("Send trusted time enables the requirement, configures the receiver, then s
 test("OSNMA correction waits for a new check cycle after each accepted trusted UTC sample", () => {
   const firstSample = { offsetMs: 0, connectionId: 1, awaitingCheck: true };
   const context = loadFunctions(["parseSecOsnma", "hasAuthenticatedOsnmaTiming", "osnmaCodeState"], {
-    DataView, Date, latestOsnmaStatus: null, latestOsnmaTimeCheck: null,
+    DataView, Date, latestOsnmaStatus: null, latestOsnmaTimeCheck: null, latestAuthenticatedTimeCheck: null,
     trustedClockSample: firstSample, liveConnectionId: 1, replayRebuilding: true,
     retainedOsnmaCodes: {}, osnmaSatelliteResults: new Map(),
   });
@@ -1911,6 +1924,8 @@ test("OSNMA correction waits for a new check cycle after each accepted trusted U
   context.parseSecOsnma(payload);
   const authenticatedCheck = context.latestOsnmaTimeCheck;
   assert.equal(authenticatedCheck.authenticated, true);
+  assert.equal(context.latestAuthenticatedTimeCheck.differenceMs, -513);
+  assert.equal(context.latestAuthenticatedTimeCheck.connectionId, 1);
   data.setUint32(20, 0, true);
   context.parseSecOsnma(payload);
   assert.equal(context.latestOsnmaTimeCheck, authenticatedCheck);
@@ -1921,6 +1936,7 @@ test("OSNMA correction waits for a new check cycle after each accepted trusted U
   context.parseSecOsnma(payload);
   assert.equal(context.latestOsnmaTimeCheck.status, 4);
   assert.equal(context.latestOsnmaTimeCheck.authenticated, false);
+  assert.equal(context.latestAuthenticatedTimeCheck.differenceMs, -513);
   context.trustedClockSample = { offsetMs: -513, connectionId: 1, awaitingCheck: true };
   context.parseSecOsnma(payload);
   assert.equal(context.latestOsnmaTimeCheck.trustedClockSample, null);

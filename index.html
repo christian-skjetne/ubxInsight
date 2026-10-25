@@ -161,7 +161,10 @@
             <span id="osnma-trusted-time-status" role="status" aria-live="polite">Connect a receiver, then click Send trusted time to enable the OSNMA requirement and send computer UTC.</span>
           </div>
           <div class="osnma-clock-row">
-            <button id="osnma-update-local-time" type="button" class="secondary" disabled title="Add the last passed OSNMA time difference to app UTC and send adjusted UTC as trusted time. Requires a new check after accepted assistance. Windows time is unchanged."><span class="material-symbols-outlined" aria-hidden="true">update</span>Apply OSNMA offset &amp; resend trusted UTC</button>
+            <span id="osnma-update-local-time-tooltip" class="osnma-button-tooltip" data-disabled="true" tabindex="0" title="Send trusted time and wait for an authenticated passed time-sync check in this connection.">
+              <button id="osnma-update-local-time" type="button" class="secondary" disabled aria-describedby="osnma-update-local-time-requirements"><span class="material-symbols-outlined" aria-hidden="true">update</span>Apply OSNMA offset &amp; resend trusted UTC</button>
+            </span>
+            <span id="osnma-update-local-time-requirements" class="visually-hidden" aria-live="polite"></span>
             <span id="osnma-local-time" role="status">Local UTC: --</span>
           </div>
           <div class="osnma-clock-options">

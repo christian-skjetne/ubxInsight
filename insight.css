@@ -196,6 +196,10 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .osnma-clock-toggle input { width: 15px; height: 15px; accent-color: #59c3c3; }
 .osnma-clock-accuracy input { width: 70px; }
 .osnma-clock-row button { display: inline-flex; align-items: center; justify-self: start; gap: 7px; height: auto; min-height: 32px; }
+.osnma-button-tooltip { position: relative; display: inline-flex; justify-self: start; }
+.osnma-button-tooltip[data-disabled="true"] { cursor: help; }
+.osnma-button-tooltip[data-disabled="true"]:hover::after, .osnma-button-tooltip[data-disabled="true"]:focus-visible::after { content: attr(title); position: absolute; z-index: 30; top: calc(100% + 7px); left: 0; width: min(420px, calc(100vw - 32px)); padding: 9px 11px; border: 1px solid var(--line); border-radius: 4px; background: #111722; color: var(--text); font-size: 12px; line-height: 1.45; white-space: normal; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); pointer-events: none; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 #osnma-local-time { min-width: 0; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
 .osnma-clock-settings p { max-width: 900px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .osnma-clock-display { margin-top: 14px; }

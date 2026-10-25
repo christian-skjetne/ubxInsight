@@ -136,6 +136,8 @@
   const osnmaSendTrustedTime = document.querySelector("#osnma-send-trusted-time");
   const osnmaTrustedTimeStatus = document.querySelector("#osnma-trusted-time-status");
   const osnmaUpdateLocalTime = document.querySelector("#osnma-update-local-time");
+  const osnmaUpdateLocalTimeTooltip = document.querySelector("#osnma-update-local-time-tooltip");
+  const osnmaUpdateLocalTimeRequirements = document.querySelector("#osnma-update-local-time-requirements");
   const osnmaLocalTime = document.querySelector("#osnma-local-time");
   const osnmaClockValue = document.querySelector("#osnma-clock-value");
   const osnmaClockAge = document.querySelector("#osnma-clock-age");
@@ -215,6 +217,8 @@
   let osnmaGalileoTime = null;
   let latestOsnmaStatus = null;
   let latestOsnmaTimeCheck = null;
+  let latestAuthenticatedTimeCheck = null;
+  let lastAppliedAuthenticatedTimeCheck = null;
   const osnmaSatelliteResults = new Map();
   const retainedOsnmaCodes = { headerAuth: null, dsm: null, tesla: null, timing: null };
   const pendingMgaAcks = [];
@@ -345,7 +349,7 @@
     for (const history of Object.values(signalHistory)) history instanceof Map ? history.clear() : history.length = 0;
     hasCorrectionReports.NAV = null; hasCorrectionReports.NAV2 = null; renderHasDiagnostics();
     secEvents.length = 0; secSigFramesReceived = 0; secSigRawFramesReceived = 0;
-    osnmaFrames.clear(); osnmaE1bFrameCount = 0; osnmaGalileoTime = null; latestOsnmaStatus = null; latestOsnmaTimeCheck = null; osnmaSatelliteResults.clear(); Object.keys(retainedOsnmaCodes).forEach((key) => { retainedOsnmaCodes[key] = null; }); osnmaTrustStatus.textContent = "Not loaded"; osnmaAuthStatus.textContent = "Not verified"; renderOsnma();
+    osnmaFrames.clear(); osnmaE1bFrameCount = 0; osnmaGalileoTime = null; latestOsnmaStatus = null; latestOsnmaTimeCheck = null; latestAuthenticatedTimeCheck = null; lastAppliedAuthenticatedTimeCheck = null; osnmaSatelliteResults.clear(); Object.keys(retainedOsnmaCodes).forEach((key) => { retainedOsnmaCodes[key] = null; }); osnmaTrustStatus.textContent = "Not loaded"; osnmaAuthStatus.textContent = "Not verified"; renderOsnma();
     signalEpoch = { latest: null, tow: null }; Object.assign(receiverThreat, { monRfJam: null, navSpoof: null, secJam: null, secSpoof: null, secJamEnabled: null, secSpoofEnabled: null });
     signalsEmpty.hidden = false; secSecuritySummary.innerHTML = "<strong>SEC-SIG:</strong> awaiting X20 security data."; secEventLog.innerHTML = "<strong>SEC-SIGLOG:</strong> no events.";
     Object.values(signalCharts).forEach((canvas) => {
@@ -1756,22 +1760,33 @@
       && status.timSyncEnabled && status.timSyncStatus === 3 && osnmaCodeState("dsm", status.dsmAuthenticationStatus) !== "bad"
       && status.satellites.every((satellite) => satellite.authStatus === 1));
   }
-  function canCorrectLocalClock(now = Date.now()) {
-    const status = latestOsnmaStatus;
-    const check = latestOsnmaTimeCheck;
-    return Boolean(settings.enableOsnma && port && writer && reading && !replayData && !trustedClockUpdatePending && status && check && trustedClockSample
-      && status.connectionId === liveConnectionId && trustedClockSample.connectionId === liveConnectionId
-      && check.trustedClockSample === trustedClockSample && check.status === 3 && check.authenticated && Number.isFinite(check.differenceMs)
-      && now >= check.receivedAt
-      && now >= status.receivedAt && now - status.receivedAt <= 40000
-      && status.osnmaEnabled && status.nmaStatus === 2 && status.cpks === 1
-      && status.pubKeyValid && status.merkleRootValid
-      && [["headerAuth", status.headerAuthStatus], ["tesla", status.teslaKeyAuthStatus], ["timing", status.timingAuthResult], ["timeSync", status.timSyncStatus], ["dsm", status.dsmAuthenticationStatus]].every(([group, code]) => osnmaCodeState(group, code) !== "bad")
-      && status.timSyncEnabled
-      && status.satellites.every((satellite) => satellite.authStatus === 1));
+  function localClockCorrectionBlockers() {
+    const sample = trustedClockSample;
+    const check = latestAuthenticatedTimeCheck;
+    const blockers = [];
+    if (!settings.enableOsnma) blockers.push("Enable Galileo OSNMA in Settings.");
+    if (!port || !writer || !reading) blockers.push("Connect to a receiver and finish configuration.");
+    if (replayData) blockers.push("Offset correction is unavailable during replay.");
+    if (trustedClockUpdatePending) blockers.push("Wait for the trusted UTC update to finish.");
+    if (!sample) blockers.push("Send trusted time and wait for receiver acceptance.");
+    else if (sample.connectionId !== liveConnectionId) blockers.push("Send trusted time again for this connection.");
+    if (!check || check.connectionId !== liveConnectionId || check.status !== 3 || !check.authenticated || !Number.isFinite(check.differenceMs)) {
+      blockers.push("Wait for an authenticated passed OSNMA time-sync check in this connection.");
+    } else if (check === lastAppliedAuthenticatedTimeCheck) {
+      blockers.push("The last authenticated check was already used; wait for another passed check.");
+    }
+    return blockers;
+  }
+  function canCorrectLocalClock() {
+    return localClockCorrectionBlockers().length === 0;
   }
   function refreshLocalClock(now = Date.now()) {
-    osnmaUpdateLocalTime.disabled = !canCorrectLocalClock(now);
+    const correctionBlockers = localClockCorrectionBlockers();
+    osnmaUpdateLocalTime.disabled = correctionBlockers.length > 0;
+    osnmaUpdateLocalTimeTooltip.title = correctionBlockers.length ? correctionBlockers.join(" ") : "All correction requirements are met. Apply the last authenticated OSNMA time difference once.";
+    osnmaUpdateLocalTimeTooltip.dataset.disabled = String(correctionBlockers.length > 0);
+    osnmaUpdateLocalTimeTooltip.tabIndex = correctionBlockers.length > 0 ? 0 : -1;
+    osnmaUpdateLocalTimeRequirements.textContent = correctionBlockers.length ? `Requirements not met: ${correctionBlockers.join(" ")}` : "All requirements for applying the OSNMA offset are met.";
     osnmaSendTrustedTime.disabled = !settings.enableOsnma || !writer || !reading || replayData || trustedClockUpdatePending || configureButton.disabled;
     const correction = `${appClockOffsetMs >= 0 ? "+" : "-"}${(Math.abs(appClockOffsetMs) / 1000).toFixed(3)} s`;
     osnmaLocalTime.textContent = `Local UTC: ${new Date(now + appClockOffsetMs).toISOString().replace("T", " ").replace("Z", " UTC")}; correction ${correction}`;
@@ -1804,8 +1819,10 @@
   }
   async function updateLocalClock() {
     if (!canCorrectLocalClock()) { refreshLocalClock(); setStatus("App time unchanged: an authenticated passed OSNMA check of accepted computer UTC assistance and a healthy live receiver are required"); return; }
-    const correctedOffsetMs = trustedClockSample.offsetMs + latestOsnmaTimeCheck.differenceMs;
+    const authenticatedCheck = latestAuthenticatedTimeCheck;
+    const correctedOffsetMs = trustedClockSample.offsetMs + authenticatedCheck.differenceMs;
     const connectionId = liveConnectionId;
+    lastAppliedAuthenticatedTimeCheck = authenticatedCheck;
     const result = await sendTrustedClockTime(correctedOffsetMs);
     if (connectionId !== liveConnectionId) return;
     if (!result.accepted) { setStatus(`App time unchanged: adjusted trusted UTC was not acknowledged (${result.message || `MGA info ${result.infoCode}`}); send receiver configuration before retrying`); return; }
@@ -1816,7 +1833,7 @@
   }
   function resetLocalClock() {
     liveConnectionId += 1; latestReceiverUtc = null; appClockOffsetMs = 0;
-    trustedClockSample = null;
+    trustedClockSample = null; latestAuthenticatedTimeCheck = null; lastAppliedAuthenticatedTimeCheck = null;
     latestPvtClock = null; latestTimeUtcClock = null; refreshOsnmaClock();
     clockOffset.textContent = "NTP/local clock offset: --";
     refreshLocalClock();
@@ -1933,8 +1950,9 @@
     if ([3, 4].includes(latestOsnmaStatus.timSyncStatus)) {
       const previousCheck = latestOsnmaTimeCheck;
       const authenticated = hasAuthenticatedOsnmaTiming(latestOsnmaStatus);
-      latestOsnmaTimeCheck = { differenceMs: latestOsnmaStatus.timSyncReqDiff, status: latestOsnmaStatus.timSyncStatus, receivedAt, trustedClockSample: trustedClockSample && !trustedClockSample.awaitingCheck ? trustedClockSample : null, authenticated };
+      latestOsnmaTimeCheck = { differenceMs: latestOsnmaStatus.timSyncReqDiff, status: latestOsnmaStatus.timSyncStatus, receivedAt, connectionId: liveConnectionId, trustedClockSample: trustedClockSample && !trustedClockSample.awaitingCheck ? trustedClockSample : null, authenticated };
       if (!authenticated && previousCheck?.authenticated && latestOsnmaTimeCheck.status === 3 && previousCheck.trustedClockSample === latestOsnmaTimeCheck.trustedClockSample && previousCheck.differenceMs === latestOsnmaTimeCheck.differenceMs) latestOsnmaTimeCheck = previousCheck;
+      if (latestOsnmaTimeCheck.status === 3 && latestOsnmaTimeCheck.authenticated) latestAuthenticatedTimeCheck = { differenceMs: latestOsnmaTimeCheck.differenceMs, status: 3, receivedAt: latestOsnmaTimeCheck.receivedAt, connectionId: liveConnectionId, authenticated: true };
     }
     for (const satellite of satellites) osnmaSatelliteResults.set(satellite.svId, { ...satellite, receivedAt });
     if (!replayRebuilding) renderOsnma();
