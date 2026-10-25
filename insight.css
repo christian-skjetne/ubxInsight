@@ -11,6 +11,7 @@ header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; bord
 .status-metric { gap: 8px; }
 .material-symbols-outlined { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; margin-right: 3px; font-size: 16px; line-height: 1; color: #72c7e7; transform: translateY(-1px); }
 .status-no-data { color: var(--muted); }
+.status-authenticated { color: #66ff88; }
 .status-tx-normal { color: #66ff88; }
 .status-tx-warning { color: #ffd37a; }
 .status-tx-critical { color: #ff7262; }

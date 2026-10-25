@@ -89,6 +89,7 @@
   const satelliteFilters = document.querySelector("#satellite-constellations");
   const satelliteTable = document.querySelector("#satellite-table");
   const satelliteReports = { NAV: null, NAV2: null };
+  const satelliteAuthReports = { NAV: null, NAV2: null };
   const satelliteConstellations = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
   const satelliteSort = { key: "id", direction: 1 };
   let satelliteSkyPoints = [];
@@ -358,8 +359,8 @@
     });
     drawSignals();
     const { width: trackWidth, height: trackHeight } = sizeCanvas(positionTrack); const trackContext = positionTrack.getContext("2d"); trackContext.fillStyle = "#090c12"; trackContext.fillRect(0, 0, trackWidth, trackHeight);
-    fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
-    latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --"; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--'; speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--'; headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
+    fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.className = "status-item"; gpsTime.title = "Authentication status unavailable."; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
+    latitudeStatus.className = "status-item"; latitudeStatus.title = "Position verification status unavailable."; longitudeStatus.className = "status-item"; longitudeStatus.title = "Position verification status unavailable."; altitudeStatus.className = "status-item status-metric"; altitudeStatus.title = "Altitude above mean sea level; position verification status unavailable."; latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --"; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--'; speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--'; headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
   }
 
   function resetLiveConnectionState() { receiveBuffer = new Uint8Array(0); resetReplayDerivedViews(false); }
@@ -1020,9 +1021,9 @@
     const source = positionSourceForReceiver(receiver.value, settings.positionSource);
     positionFixes = []; positionView = null; positionDrag = null; latestReceiverUtc = null;
     fixStatus.className = "status-item status-no-data"; fixStatus.textContent = `Fix: waiting for ${source}`;
-    gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
-    latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --";
-    altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--';
+    gpsTime.className = "status-item"; gpsTime.title = "Authentication status unavailable."; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
+    latitudeStatus.className = "status-item"; latitudeStatus.title = "Position verification status unavailable."; longitudeStatus.className = "status-item"; longitudeStatus.title = "Position verification status unavailable."; latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --";
+    altitudeStatus.className = "status-item status-metric"; altitudeStatus.title = "Altitude above mean sea level; position verification status unavailable."; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--';
     speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--';
     headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
     positionEmpty.hidden = false;
@@ -1370,19 +1371,23 @@
     const altitudeMetres = data.getInt32(36, true) / 1000;
     const groundSpeedMetresPerSecond = data.getInt32(60, true) / 1000;
     const headingDegrees = data.getInt32(64, true) / 1e5;
+    const flags3 = data.getUint16(78, true);
+    const authFlagsAvailable = receiver.value === "x20";
+    const authTime = authFlagsAvailable && Boolean(flags3 & 0x2000);
+    const nmaFixStatus = authFlagsAvailable && Boolean(flags3 & 0x4000);
     const fixNames = ["No fix", "Dead reckoning", "2D fix", "3D fix", "GNSS + DR", "Time only"];
     const fixType = payload[20]; const satellites = payload[23];
     const year = data.getUint16(4, true); const month = payload[6]; const day = payload[7]; const hour = payload[8]; const minute = payload[9]; const second = payload[10];
     const valid = payload[11]; const nano = data.getInt32(16, true); const receivedAt = Date.now();
     if (positionSource === "NAV") {
-      latestPvtClock = { utcMs: Date.UTC(year, month - 1, day, hour, minute, second) + nano / 1e6, nano, tAccNs: data.getUint32(12, true), receivedAt, validDate: Boolean(valid & 0x01), validTime: Boolean(valid & 0x02), fullyResolved: Boolean(valid & 0x04), confirmedDate: Boolean(valid & 0x10), confirmedTime: Boolean(valid & 0x20) };
+      latestPvtClock = { utcMs: Date.UTC(year, month - 1, day, hour, minute, second) + nano / 1e6, nano, tAccNs: data.getUint32(12, true), receivedAt, validDate: Boolean(valid & 0x01), validTime: Boolean(valid & 0x02), fullyResolved: Boolean(valid & 0x04), confirmedDate: Boolean(valid & 0x10), confirmedTime: Boolean(valid & 0x20), authTime, authFlagsAvailable };
       refreshOsnmaClock(receivedAt);
     }
     if (positionSource !== positionSourceForReceiver(receiver.value, settings.positionSource)) return;
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
     const time = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
     const positionValid = Boolean(payload[21] & 0x01) && [2, 3, 4].includes(fixType);
-    updateReceiverStatus({ latitude, longitude, fixType, satellites, time, year, month, day, hour, minute, second, nano, altitudeMetres, groundSpeedMetresPerSecond, headingDegrees, valid, positionValid, positionSource });
+    updateReceiverStatus({ latitude, longitude, fixType, satellites, time, year, month, day, hour, minute, second, nano, altitudeMetres, groundSpeedMetresPerSecond, headingDegrees, valid, positionValid, authTime, nmaFixStatus, authFlagsAvailable, positionSource });
     if (!positionValid) return;
     const utm = latLonToUtm33(latitude, longitude);
     const threatLevel = Math.max(receiverThreat.monRfJam, receiverThreat.navSpoof, receiverThreat.secJam, receiverThreat.secSpoof);
@@ -1393,6 +1398,9 @@
     positionRecenter.disabled = false; positionZoomIn.disabled = false; positionZoomOut.disabled = false;
     positionEmpty.hidden = true;
     positionInfo.innerHTML = `<strong>Source:</strong> ${positionSource} &nbsp; <strong>Latitude:</strong> ${latitude.toFixed(6)}&deg; &nbsp; <strong>Longitude:</strong> ${longitude.toFixed(6)}&deg; &nbsp; <strong>Fix:</strong> ${fixNames[fixType] || `Fix ${fixType}`} &nbsp; <strong>SVs:</strong> ${satellites} &nbsp; <strong>Time:</strong> ${time} &nbsp; <a href="https://www.google.com/maps?q=${latitude.toFixed(6)},${longitude.toFixed(6)}" target="_blank">Open in Maps</a>`;
+    const nmaFixDescription = !authFlagsAvailable ? "Unavailable" : nmaFixStatus ? "Verified" : "Not verified";
+    const nmaFixDetail = nmaFixStatus ? "The mixed solution agrees with NMA-authenticated data." : "Not verified means the mixed solution did not agree or comparison was unavailable; it does not by itself indicate spoofing. Refer to SEC-SIG for spoofing alerts.";
+    positionInfo.innerHTML += ` &nbsp; <strong title="${nmaFixDetail}">Position verification:</strong> ${nmaFixDescription}`;
     if (!replayRebuilding && !positionPanel.hidden) { drawPositionTrack(); updatePositionMap(fix, droppedOldestFix); }
   }
 
@@ -1411,6 +1419,9 @@
     fixStatus.className = `status-item ${fix.fixType >= 3 ? "status-fix-good" : fix.fixType === 2 ? "status-fix-warning" : "status-fix-bad"}`;
     fixStatus.textContent = `${indicator} ${fixName} | ${fix.positionSource} | ${fix.satellites} SV`;
     const utcValid = (fix.valid & 0x03) === 0x03;
+    const timeAuthenticated = utcValid && Boolean(fix.authTime);
+    gpsTime.className = `status-item${timeAuthenticated ? " status-authenticated" : ""}`;
+    gpsTime.title = timeAuthenticated ? "Authenticated: the receiver reports this output time was validated against an external trusted time source (NAV-PVT authTime=1)." : fix.authTime ? "The receiver reports authenticated time, but the displayed UTC is invalid; it is not highlighted." : "The receiver has not reported authenticated output time (NAV-PVT authTime=0 or unavailable).";
     gpsTime.textContent = `GPS UTC: ${utcValid ? `${fix.time} UTC` : "unavailable"}`;
     if (utcValid) {
       const receiverUtc = Date.UTC(fix.year, fix.month - 1, fix.day, fix.hour, fix.minute, fix.second) + fix.nano / 1e6;
@@ -1420,6 +1431,13 @@
       const sign = offsetMilliseconds >= 0 ? "+" : "-";
       clockOffset.textContent = `${appClockOffsetMs ? "App" : "NTP/local"} clock offset: ${sign}${(Math.abs(offsetMilliseconds) / 1000).toFixed(3)} s`;
     } else { latestReceiverUtc = null; clockOffset.textContent = "NTP/local clock offset: unavailable"; }
+    const positionVerified = Boolean(fix.positionValid && fix.nmaFixStatus);
+    const locationClass = `status-item${positionVerified ? " status-authenticated" : ""}`;
+    const locationTitle = positionVerified ? "Verified: the receiver reports the mixed solution agrees with NMA-authenticated data (NAV-PVT nmaFixStatus=1)." : fix.nmaFixStatus ? "The receiver reports a verified solution, but this position is invalid; it is not highlighted." : "Not shown as verified. A clear or unavailable nmaFixStatus does not imply spoofing; refer to SEC-SIG alerts.";
+    latitudeStatus.className = locationClass; latitudeStatus.title = locationTitle;
+    longitudeStatus.className = locationClass; longitudeStatus.title = locationTitle;
+    altitudeStatus.className = `status-item status-metric${positionVerified ? " status-authenticated" : ""}`;
+    altitudeStatus.title = `Altitude above mean sea level. ${locationTitle}`;
     if (!fix.positionValid) {
       latitudeStatus.textContent = "Lat: no fix"; longitudeStatus.textContent = "Lon: no fix"; altitudeStatus.textContent = "Altitude: --"; speedStatus.textContent = "Speed: --"; headingStatus.textContent = "Heading: --";
       return;
@@ -1448,7 +1466,8 @@
     osnmaClockAge.dataset.state = age === null ? "waiting" : fresh ? "good" : "bad";
     if (latestPvtClock) {
       const pvt = latestPvtClock;
-      osnmaClockPvt.textContent = `${pvt.validDate && pvt.validTime ? "Date/time valid" : "Date/time invalid"}; date ${pvt.confirmedDate ? "confirmed" : "unconfirmed"}; time ${pvt.confirmedTime ? "confirmed" : "unconfirmed"}; fully resolved ${pvt.fullyResolved ? "yes" : "no"}; tAcc ${pvt.tAccNs.toLocaleString()} ns`;
+      const timeAuthentication = !pvt.authFlagsAvailable ? "unavailable" : pvt.authTime ? "authenticated (validated against an external trusted time source)" : "not authenticated";
+      osnmaClockPvt.textContent = `${pvt.validDate && pvt.validTime ? "Date/time valid" : "Date/time invalid"}; date ${pvt.confirmedDate ? "confirmed" : "unconfirmed"}; time ${pvt.confirmedTime ? "confirmed" : "unconfirmed"}; fully resolved ${pvt.fullyResolved ? "yes" : "no"}; output time ${timeAuthentication}; tAcc ${pvt.tAccNs.toLocaleString()} ns`;
       osnmaClockPvt.dataset.state = pvt.validDate && pvt.validTime ? "good" : "waiting";
     } else { osnmaClockPvt.textContent = "Waiting for NAV-PVT"; osnmaClockPvt.dataset.state = "waiting"; }
     if (latestTimeUtcClock) {
@@ -1532,6 +1551,7 @@
 
   function resetSatelliteReports() {
     satelliteReports.NAV = null; satelliteReports.NAV2 = null;
+    satelliteAuthReports.NAV = null; satelliteAuthReports.NAV2 = null;
     renderSatellites();
   }
 
@@ -1559,7 +1579,10 @@
     satelliteCount.textContent = report ? `${satellites.length} shown / ${report.satellites.length} reported | ${satellites.filter((satellite) => satellite.used).length} used` : "0 reported";
     const health = ["Unknown", "Healthy", "Unhealthy", "Reserved"];
     const emptyMessage = !report ? "Waiting for satellite data." : !report.satellites.length ? "No satellites reported." : satelliteUsedOnly.checked ? "No used satellites match the constellation filters." : "No satellites match the constellation filters.";
-    satelliteRows.innerHTML = satellites.length ? satellites.map((satellite) => `<tr><th scope="row" style="color:${gnssColor(satellite.gnssId)}">${satelliteGnssName(satellite.gnssId)} ${satellite.svId}</th><td>${satellite.cno}</td><td>${satellite.elevation === null ? "--" : `${satellite.elevation}\u00b0`}</td><td>${satellite.azimuth === null ? "--" : `${satellite.azimuth}\u00b0`}</td><td>${satellite.used ? "Used" : satellite.quality >= 4 ? "Tracked" : satellite.quality >= 2 ? "Acquired" : satellite.quality === 1 ? "Searching" : "No signal"}</td><td>${health[satellite.health]}</td><td>${satelliteCorrectionText(satellite)}</td></tr>`).join("") : `<tr><td colspan="7">${emptyMessage}</td></tr>`;
+    satelliteRows.innerHTML = satellites.length ? satellites.map((satellite) => {
+      const authentication = satelliteAuthentication(satellite, report, satelliteAuthReports[source]);
+      return `<tr><th scope="row" style="color:${gnssColor(satellite.gnssId)}">${satelliteGnssName(satellite.gnssId)} ${satellite.svId}</th><td>${satellite.cno}</td><td>${satellite.elevation === null ? "--" : `${satellite.elevation}\u00b0`}</td><td>${satellite.azimuth === null ? "--" : `${satellite.azimuth}\u00b0`}</td><td>${satellite.used ? "Used" : satellite.quality >= 4 ? "Tracked" : satellite.quality >= 2 ? "Acquired" : satellite.quality === 1 ? "Searching" : "No signal"}</td><td>${health[satellite.health]}</td><td>${satelliteCorrectionText(satellite)}</td><td title="${authentication.detail}">${authentication.label}</td></tr>`;
+    }).join("") : `<tr><td colspan="8">${emptyMessage}</td></tr>`;
     for (const button of satelliteTable.querySelectorAll("[data-sort]")) {
       const active = button.dataset.sort === satelliteSort.key;
       button.closest("th").setAttribute("aria-sort", active ? satelliteSort.direction === 1 ? "ascending" : "descending" : "none");
@@ -1644,6 +1667,39 @@
     const epoch = signalSampleEpoch(report.iTow);
     for (const satellite of report.satellites) appendSeries(signalHistory.cno, `${satellite.gnssId}:${satellite.svId}`, epoch, satellite.cno, gnssColor(satellite.gnssId));
     signalsEmpty.hidden = true; if (!replayRebuilding) scheduleSignalDraw();
+  }
+
+  function decodeSatelliteAuthReport(payload) {
+    if (payload.length < 8 || payload[4] !== 1) return null;
+    const data = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+    const satellites = new Map();
+    const count = Math.min(payload[5], Math.floor((payload.length - 8) / 16));
+    for (let index = 0; index < count; index++) {
+      const offset = 8 + index * 16;
+      const gnssId = payload[offset]; const svId = payload[offset + 1];
+      const identity = `${gnssId}:${svId}`;
+      const satellite = satellites.get(identity) || { gnssId, svId, signalCount: 0, authenticatedSignalCount: 0 };
+      satellite.signalCount++;
+      if (data.getUint16(offset + 10, true) & 0x0200) satellite.authenticatedSignalCount++;
+      satellites.set(identity, satellite);
+    }
+    return { iTow: data.getUint32(0, true), satellites: [...satellites.values()] };
+  }
+
+  function satelliteAuthentication(satellite, satelliteReport, authReport) {
+    if (!authReport || authReport.iTow !== satelliteReport?.iTow) return { label: "Unknown", detail: "No matching NAV-SIG report" };
+    const auth = authReport.satellites.find((entry) => entry.gnssId === satellite.gnssId && entry.svId === satellite.svId);
+    if (!auth) return { label: "Unknown", detail: "No matching NAV-SIG signals" };
+    const label = auth.authenticatedSignalCount === auth.signalCount ? "Authenticated" : auth.authenticatedSignalCount === 0 ? "Not authenticated" : "Mixed";
+    return { label, detail: `${auth.authenticatedSignalCount} of ${auth.signalCount} signals authenticated` };
+  }
+
+  function parseNavSig(payload, solution = "NAV") {
+    if (!["NAV", "NAV2"].includes(solution)) return;
+    const report = decodeSatelliteAuthReport(payload);
+    if (!report) return;
+    satelliteAuthReports[solution] = { ...report, receivedAt: Date.now() };
+    if (!replayRebuilding) renderSatellites();
   }
 
   function parseRawx(payload) {
@@ -2151,6 +2207,7 @@
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x04) parseNavDop(payload, messageClass === 0x29 ? "NAV2" : "NAV");
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x21) parseNavTimeUtc(payload);
     if (messageClass === 0x01 && messageId === 0x35) parseNavSat(payload, "NAV");
+    if (messageClass === 0x01 && messageId === 0x43) parseNavSig(payload, "NAV");
     if (messageClass === 0x02 && messageId === 0x15 && payload.length >= 16) {
       const epoch = signalSampleEpoch(new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getFloat64(0, true) * 1000);
       recordSignalComputerTime(epoch);
@@ -2162,6 +2219,7 @@
     if (messageClass === 0x27 && messageId === 0x10) parseSecSigLog(payload);
     if (messageClass === 0x27 && messageId === 0x0a) parseSecOsnma(payload);
     if (messageClass === 0x29 && messageId === 0x35) parseNavSat(payload, "NAV2"); // NAV2-SAT on newer X20 firmware
+    if (messageClass === 0x29 && messageId === 0x43) parseNavSig(payload, "NAV2");
     if (messageClass === 0x29 && messageId === 0x07) parseNavPvt(payload, "NAV2"); // NAV2-PVT on newer X20 firmware
     if (messageClass === 0x02 && messageId === 0x13) parseRxmSfrbx(payload);
     if ((messageClass === 0x01 || messageClass === 0x29) && messageId === 0x25) parseNavTimeGal(payload);
@@ -2559,6 +2617,7 @@
         ["NAV-DOP UART1", 0x20910039, 1, 1],
         ["NAV-TIMEUTC UART1", 0x2091005c, 1, 1],
         ["NAV-SAT UART1", 0x20910016, 1, 1],
+        ["NAV-SIG UART1", 0x20910043, 1, 1],
         ["NAV-STATUS UART1", 0x2091001b, 1, 1],
         ["Assistance message ACKs", 0x10110025, 1, 1],
         ...gnssFeatureConfigurationRequests(receiver.value, settings.enableOsnma, settings.enableGalHas),

@@ -1011,6 +1011,30 @@ test("satellite reports decode signed sky coordinates and usage without mixing e
   assert.equal(context.decodeSatelliteReport(bytes), null);
 });
 
+test("NAV-SIG authentication is aggregated per satellite and preserves mixed signals", () => {
+  const context = loadFunctions(["decodeSatelliteAuthReport", "satelliteAuthentication", "parseNavSig"], {
+    satelliteAuthReports: { NAV: null, NAV2: null }, replayRebuilding: true,
+  });
+  const payload = new Uint8Array(72); payload[4] = 1; payload[5] = 4;
+  const data = new DataView(payload.buffer); data.setUint32(0, 123000, true);
+  for (const [index, svId, authenticated] of [[0, 12, true], [1, 12, false], [2, 24, true], [3, 36, false]]) {
+    const offset = 8 + index * 16; payload[offset] = 2; payload[offset + 1] = svId;
+    data.setUint16(offset + 10, authenticated ? 0x0200 : 0, true);
+  }
+  const report = context.decodeSatelliteAuthReport(payload);
+  assert.deepEqual(Array.from(report.satellites, ({ svId, signalCount, authenticatedSignalCount }) => [svId, signalCount, authenticatedSignalCount]), [[12, 2, 1], [24, 1, 1], [36, 1, 0]]);
+  assert.equal(context.satelliteAuthentication({ gnssId: 2, svId: 12 }, { iTow: 123000 }, report).label, "Mixed");
+  assert.equal(context.satelliteAuthentication({ gnssId: 2, svId: 24 }, { iTow: 123000 }, report).label, "Authenticated");
+  assert.equal(context.satelliteAuthentication({ gnssId: 2, svId: 36 }, { iTow: 123000 }, report).label, "Not authenticated");
+  assert.equal(context.satelliteAuthentication({ gnssId: 2, svId: 24 }, { iTow: 123001 }, report).label, "Unknown");
+  context.parseNavSig(payload, "NAV");
+  const nav2Payload = payload.slice(); new DataView(nav2Payload.buffer).setUint32(0, 123001, true);
+  context.parseNavSig(nav2Payload, "NAV2");
+  assert.equal(context.satelliteAuthReports.NAV.iTow, 123000);
+  assert.equal(context.satelliteAuthReports.NAV2.iTow, 123001);
+  assert.equal(context.decodeSatelliteAuthReport(new Uint8Array(7)), null);
+});
+
 test("satellite correction flags distinguish used sources and types from availability", () => {
   const context = loadFunctions(["decodeSatelliteReport", "satelliteCorrectionText"], {});
   const bytes = new Uint8Array(20); bytes[4] = 1; bytes[5] = 1;
@@ -1132,12 +1156,12 @@ test("satellite C/N0 history accepts only NAV-SAT while preserving NAV2 reports"
   payload[4] = 2;
   context.parseNavSat(payload, "NAV");
   assert.equal(context.signalEpoch.latest, 2);
-  assert.doesNotMatch(source, /parseNavSig\(/);
+  assert.match(source, /function parseNavSig\(/);
 });
 
 test("NAV-SAT snapshots remain separate for each solution and empty reports clear old satellites", () => {
   const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "resetSatelliteReports", "signalSampleEpoch"], {
-    satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
+    satelliteReports: { NAV: null, NAV2: null }, satelliteAuthReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
     signalEpoch: { latest: null, tow: null }, signalHistory: { cno: new Map() }, replayRebuilding: false,
     signalsEmpty: {}, renderSatellites() {}, renderHasDiagnostics() {}, drawSignals() {}, appendSeries() {}, gnssColor() {},
   });
@@ -1154,15 +1178,18 @@ test("NAV-SAT snapshots remain separate for each solution and empty reports clea
   context.resetSatelliteReports();
   assert.equal(context.satelliteReports.NAV, null);
   assert.equal(context.satelliteReports.NAV2, null);
+  assert.equal(context.satelliteAuthReports.NAV, null);
+  assert.equal(context.satelliteAuthReports.NAV2, null);
 });
 
 test("satellites view marks stale data and preserves recorded source selection", () => {
   const option = {};
   const source = { value: "NAV", querySelector: () => option };
-  const context = loadFunctions(["renderSatellites", "selectedSatellites", "satelliteGnssName", "satelliteCorrectionText"], {
+  const context = loadFunctions(["renderSatellites", "selectedSatellites", "satelliteGnssName", "satelliteCorrectionText", "satelliteAuthentication"], {
     satelliteSource: source, satellitesPanel: { hidden: false }, receiver: { value: "x20" },
     satelliteUsedOnly: { checked: false },
     satelliteReports: { NAV: { iTow: 1000, receivedAt: 1000, satellites: [{ gnssId: 2, svId: 12, cno: 42, elevation: 45, azimuth: 90, used: true, quality: 4, health: 1 }] }, NAV2: null },
+    satelliteAuthReports: { NAV: { iTow: 1000, satellites: [{ gnssId: 2, svId: 12, signalCount: 2, authenticatedSignalCount: 1 }] }, NAV2: null },
     satelliteConstellations: new Set([2]), satelliteSort: { key: "id", direction: 1 },
     satelliteStatus: { dataset: {} }, satelliteCount: {}, satelliteRows: {}, satelliteTable: { querySelectorAll: () => [] },
     replayData: null, gnssColor: () => "#66ff88", drawSatelliteSky() {},
@@ -1170,6 +1197,8 @@ test("satellites view marks stale data and preserves recorded source selection",
   context.renderSatellites(1000);
   assert.match(context.satelliteRows.innerHTML, /Galileo 12.*42.*Used.*Healthy/);
   assert.match(context.satelliteRows.innerHTML, /None used/);
+  assert.match(context.satelliteRows.innerHTML, /Mixed/);
+  assert.match(context.satelliteRows.innerHTML, /1 of 2 signals authenticated/);
   context.satelliteReports.NAV.satellites[0].correctionSources = ["HAS"];
   context.satelliteReports.NAV.satellites[0].correctionTypes = ["Pseudorange"];
   context.renderSatellites(1000);
@@ -1589,6 +1618,12 @@ test("map accepts only valid position fixes", () => {
   context.parseNavPvt(Object.assign(new Uint8Array(92), { 20: 3, 21: 1 }), "NAV2");
   assert.equal(trackDraws, 1);
   assert.equal(mapUpdates, 1);
+  context.settings.positionSource = "NAV";
+  const verifiedPvt = new Uint8Array(92); verifiedPvt[20] = 3; verifiedPvt[21] = 1;
+  new DataView(verifiedPvt.buffer).setUint16(78, 0x4000, true);
+  context.parseNavPvt(verifiedPvt, "NAV");
+  assert.match(context.positionInfo.innerHTML, /Position verification:<\/strong> Verified/);
+  assert.match(context.positionInfo.innerHTML, /mixed solution agrees with NMA-authenticated data/);
 });
 
 test("NAV-PVT clock parsing retains confirmation flags and time accuracy", () => {
@@ -1605,6 +1640,25 @@ test("NAV-PVT clock parsing retains confirmation flags and time accuracy", () =>
   assert.equal(context.latestPvtClock.fullyResolved, true);
   assert.equal(context.latestPvtClock.confirmedDate, true);
   assert.equal(context.latestPvtClock.confirmedTime, true);
+});
+
+test("NAV-PVT authTime and nmaFixStatus bits are exposed separately", () => {
+  let observedFix;
+  const context = loadFunctions(["parseNavPvt", "positionSourceForReceiver"], {
+    DataView, receiver: { value: "x20" }, settings: { positionSource: "NAV" }, recordPositionSolution() {}, refreshOsnmaClock() {},
+    updateReceiverStatus(fix) { observedFix = fix; },
+  });
+  const payload = new Uint8Array(92); payload[20] = 3;
+  const data = new DataView(payload.buffer); data.setInt32(24, 10000000, true); data.setInt32(28, 20000000, true); data.setUint16(78, 0x6000, true);
+  context.parseNavPvt(payload, "NAV");
+  assert.equal(context.latestPvtClock.authTime, true);
+  assert.equal(observedFix.authTime, true);
+  assert.equal(observedFix.nmaFixStatus, true);
+  context.receiver.value = "f9p";
+  context.parseNavPvt(payload, "NAV");
+  assert.equal(context.latestPvtClock.authTime, false);
+  assert.equal(observedFix.authTime, false);
+  assert.equal(observedFix.nmaFixStatus, false);
 });
 
 test("NAV-TIMEUTC parsing retains UTC validity and accuracy", () => {
@@ -1626,7 +1680,7 @@ test("OSNMA clock shows receiver freshness, local-time preference, and separate 
   const state = () => ({ textContent: "", dataset: {} });
   const context = loadFunctions(["refreshOsnmaClock"], {
     settings: { enableOsnma: true },
-    latestPvtClock: { utcMs: Date.UTC(2026, 9, 19), receivedAt: now - 125, tAccNs: 80, validDate: true, validTime: true, fullyResolved: true, confirmedDate: true, confirmedTime: true },
+    latestPvtClock: { utcMs: Date.UTC(2026, 9, 19), receivedAt: now - 125, tAccNs: 80, validDate: true, validTime: true, fullyResolved: true, confirmedDate: true, confirmedTime: true, authTime: true, authFlagsAvailable: true },
     latestTimeUtcClock: null, osnmaClockSettings: { showLocalTime: false },
     osnmaClockValue: state(), osnmaClockAge: state(), osnmaClockPvt: state(), osnmaClockTimeUtc: state(), osnmaClockAuth: state(),
     latestOsnmaStatus: { ...workingStatus(), receivedAt: now, connectionId: 1 },
@@ -1634,6 +1688,7 @@ test("OSNMA clock shows receiver freshness, local-time preference, and separate 
   });
   context.refreshOsnmaClock(now);
   assert.match(context.osnmaClockValue.textContent, /UTC$/);
+  assert.match(context.osnmaClockPvt.textContent, /output time authenticated \(validated against an external trusted time source\)/);
   assert.equal(context.osnmaClockAge.dataset.state, "good");
   assert.match(context.osnmaClockAuth.textContent, /check passed/);
   assert.equal(context.osnmaClockAuth.dataset.state, "good");
@@ -1961,6 +2016,38 @@ test("UTC capture includes signed nanoseconds and excludes unresolved or replay 
   context.replayData = {};
   context.updateReceiverStatus(fix);
   assert.equal(context.latestReceiverUtc, null);
+});
+
+test("status header highlights only authenticated time and verified position", () => {
+  const element = () => ({ className: "status-item", textContent: "", title: "" });
+  const context = loadFunctions(["updateReceiverStatus"], {
+    fixStatus: element(), gpsTime: element(), clockOffset: element(), latitudeStatus: element(), longitudeStatus: element(),
+    altitudeStatus: { ...element(), innerHTML: "" }, speedStatus: { ...element(), innerHTML: "" }, headingStatus: { ...element(), innerHTML: "" },
+    port: null, reading: false, replayData: null, appClockOffsetMs: 0, latestReceiverUtc: null, liveConnectionId: 1,
+  });
+  const fix = {
+    fixType: 3, satellites: 8, positionSource: "NAV", valid: 7, time: "2026-10-25 12:00:00", year: 2026, month: 10,
+    day: 25, hour: 12, minute: 0, second: 0, nano: 0, positionValid: true, latitude: 59, longitude: 10,
+    altitudeMetres: 100, groundSpeedMetresPerSecond: 1, headingDegrees: 90,
+  };
+  context.updateReceiverStatus({ ...fix, authTime: true, nmaFixStatus: true });
+  assert.match(context.gpsTime.className, /status-authenticated/);
+  assert.match(context.gpsTime.title, /external trusted time source/);
+  assert.match(context.latitudeStatus.className, /status-authenticated/);
+  assert.match(context.longitudeStatus.className, /status-authenticated/);
+  assert.match(context.altitudeStatus.className, /status-authenticated/);
+  assert.match(context.latitudeStatus.title, /mixed solution agrees/);
+  context.updateReceiverStatus({ ...fix, authTime: false, nmaFixStatus: false });
+  assert.equal(context.gpsTime.className, "status-item");
+  assert.equal(context.latitudeStatus.className, "status-item");
+  assert.equal(context.longitudeStatus.className, "status-item");
+  assert.equal(context.altitudeStatus.className, "status-item status-metric");
+  assert.match(context.latitudeStatus.title, /does not imply spoofing/);
+  context.updateReceiverStatus({ ...fix, valid: 0, positionValid: false, authTime: true, nmaFixStatus: true });
+  assert.equal(context.gpsTime.className, "status-item");
+  assert.match(context.gpsTime.title, /UTC is invalid/);
+  assert.equal(context.latitudeStatus.className, "status-item");
+  assert.match(context.latitudeStatus.title, /position is invalid/);
 });
 
 test("waterfall cursor maps pointer rows through the timestamp ring buffer", () => {
