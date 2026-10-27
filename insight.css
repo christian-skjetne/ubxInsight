@@ -67,6 +67,18 @@ main { width: 100%; margin: 0; padding: 12px; }
 .satellite-legend span::before { content: ""; width: 10px; height: 10px; border: 1px solid #72c7e7; border-radius: 50%; }
 .satellite-marker-used::before { background: #72c7e7; }
 .satellite-legend .satellite-marker-corrected::before { border-radius: 0; background: linear-gradient(45deg, #72c7e7 50%, transparent 50%); }
+.satellite-legend .satellite-marker-orbit::before { border: 0; border-radius: 0; background: linear-gradient(90deg, #ffb347 0 14%, #00ffff 14% 28%, #66ff88 28% 42%, #ff7262 42% 56%, #ffff66 56% 70%, #f27bfd 70% 84%, #88aaff 84%) center / 2px 100% no-repeat, linear-gradient(90deg, #ffb347 0 14%, #00ffff 14% 28%, #66ff88 28% 42%, #ff7262 42% 56%, #ffff66 56% 70%, #f27bfd 70% 84%, #88aaff 84%) center / 100% 2px no-repeat; }
+.satellite-location-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 12px; }
+.satellite-location-controls > label, .satellite-manual-location, .satellite-manual-location label { display: inline-flex; align-items: center; gap: 7px; }
+.satellite-location-controls input[type="checkbox"] { width: 14px; height: 14px; accent-color: #59c3c3; }
+.satellite-manual-location { flex-wrap: wrap; }
+.satellite-manual-location input { width: 120px; }
+.satellite-prediction-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; color: var(--muted); font-size: 12px; }
+.satellite-prediction-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 6px; }
+.satellite-prediction-toolbar button { flex: 0 0 auto; padding: 5px 8px; font-size: 12px; }
+#satellite-comparison-table { min-width: 460px; font-size: 12px; font-variant-numeric: tabular-nums; }
+#satellite-comparison-table th, #satellite-comparison-table td { padding: 6px; }
+.satellite-prediction-note { margin: 0; padding: 8px 12px 12px; color: var(--muted); font-size: 11px; }
 #satellite-table { table-layout: fixed; min-width: 640px; font-variant-numeric: tabular-nums; }
 #satellite-table th, #satellite-table td { padding: 8px 6px; overflow-wrap: anywhere; }
 #satellite-table th:first-child { width: 20%; }

@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
   <link rel="stylesheet" href="insight.css">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" onerror="this.onerror=null;this.href='leaflet.css'">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" onerror="this.onerror=null;this.href='maplibre-gl.css'">
 </head>
 <body>
   <header>
@@ -64,7 +64,7 @@
       <button id="osnma-tab" class="tab" role="tab" aria-selected="false" aria-controls="osnma-panel">OSNMA</button>
     </div>
     <section id="spectrum-panel" role="tabpanel" aria-labelledby="spectrum-tab">
-      <p id="empty">Connect a u-blox receiver, then enable MON-SPAN if it is not already configured.</p>
+      <p id="empty">Connect a u-blox receiver.</p>
       <section id="blocks"></section>
     </section>
     <section id="position-panel" role="tabpanel" aria-labelledby="position-tab" hidden>
@@ -89,10 +89,26 @@
       <p id="position-info">No position data.</p>
     </section>
     <section id="satellites-panel" role="tabpanel" aria-labelledby="satellites-tab" hidden>
-      <div class="satellite-toolbar"><label>Solution <select id="satellite-source"><option value="NAV">NAV</option><option value="NAV2">NAV2</option></select></label><label><input id="satellite-used-only" type="checkbox"> Used in solution only</label><span id="satellite-status" data-state="waiting">Waiting for NAV-SAT</span></div>
+      <div class="satellite-toolbar"><label>Solution <select id="satellite-source"><option value="NAV">NAV</option><option value="NAV2">NAV2</option></select></label><label><input id="satellite-used-only" type="checkbox"> Used in solution only</label><label><input id="satellite-online-visible" type="checkbox" checked> Show online sky-map satellites</label><span id="satellite-status" data-state="waiting">Waiting for NAV-SAT</span></div>
       <fieldset id="satellite-constellations"><legend>Constellations</legend></fieldset>
       <div id="satellite-views">
-        <section class="osnma-data satellite-sky-view"><header><h2>Satellite Sky View</h2><span>Azimuth / elevation</span></header><canvas id="satellite-sky" aria-label="Satellite azimuth and elevation sky plot"></canvas><div class="satellite-legend"><span class="satellite-marker-used">Used in solution</span><span class="satellite-marker-other">Not used</span><span class="satellite-marker-corrected">Corrections used</span></div></section>
+        <section class="osnma-data satellite-sky-view">
+          <header><h2>Satellite Sky View</h2><span>Receiver / online TLE</span></header>
+          <canvas id="satellite-sky" aria-label="Receiver satellite positions with online orbit predictions"></canvas>
+          <div class="satellite-legend"><span class="satellite-marker-used">Used in solution</span><span class="satellite-marker-other">Not used</span><span class="satellite-marker-corrected">Corrections used</span><span class="satellite-marker-orbit">Online TLE prediction</span></div>
+          <div class="satellite-location-controls">
+            <label><input id="satellite-location-locked" type="checkbox"> Lock sky-map location</label>
+            <label>Location source<select id="satellite-location-mode"><option value="receiver">Freeze latest receiver position</option><option value="manual">Enter independent coordinates</option></select></label>
+            <div id="satellite-manual-location" class="satellite-manual-location" hidden>
+              <label>Latitude<input id="satellite-location-latitude" type="number" min="-90" max="90" step="any" inputmode="decimal" aria-label="Sky-map location latitude"></label>
+              <label>Longitude<input id="satellite-location-longitude" type="number" min="-180" max="180" step="any" inputmode="decimal" aria-label="Sky-map location longitude"></label>
+            </div>
+          </div>
+          <div class="satellite-prediction-toolbar"><span id="satellite-prediction-status" role="status" aria-live="polite">Waiting for a valid receiver position.</span><div class="satellite-prediction-actions"><button id="satellite-feed-upload-button" class="secondary" type="button">Import TLE / PRN mapping</button><input id="satellite-feed-upload" type="file" accept=".tle,.txt,.js" multiple hidden aria-label="Import GNSS TLE or PRN mapping files"><button id="satellite-prediction-refresh" class="secondary" type="button">Refresh online data</button></div></div>
+          <p class="satellite-prediction-note">If feed requests are blocked by CORS, download and import the <a href="https://raw.githubusercontent.com/satvisorcom/satvisor-data/master/celestrak/tle/gnss.tle" target="_blank" rel="noopener noreferrer">GNSS TLE file</a> and optionally the <a href="https://raw.githubusercontent.com/taroz/GNSS-Radar/master/js/prnmap.js" target="_blank" rel="noopener noreferrer">GNSS-Radar PRN mapping file</a>. Import both to resolve PRNs when TLE names do not include them. Imported files are cached in this browser.</p>
+          <div class="osnma-table-wrap"><table id="satellite-comparison-table"><thead><tr><th scope="col">Satellite</th><th scope="col">Receiver Az / El</th><th scope="col">TLE Az / El</th><th scope="col">Δ Az / El</th></tr></thead><tbody id="satellite-comparison-rows"><tr><td colspan="4">Waiting for receiver position and satellite data.</td></tr></tbody></table></div>
+          <p class="satellite-prediction-note">Receiver location may be inaccurate or spoofed. Lock a fixed location or enter coordinates independently. Orbit positions use approximate TLE data from the <a href="https://github.com/christian-skjetne/PRN-to-skymap" target="_blank" rel="noopener noreferrer">GNSS Sky Map API</a>; they are predictions, not receiver observations or precision ephemerides.</p>
+        </section>
         <section class="osnma-data"><header><h2>Satellites</h2><span id="satellite-count">0 reported</span></header><div class="osnma-table-wrap"><table id="satellite-table"><thead><tr>
           <th scope="col" aria-sort="ascending"><button type="button" class="satellite-sort" data-sort="id" title="Sort by satellite"><span>Satellite</span><span class="material-symbols-outlined" aria-hidden="true">arrow_upward</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="cno" title="Sort by C/N0 (dB-Hz)"><span>C/N0</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
@@ -101,7 +117,7 @@
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="used" title="Sort by solution use"><span>Use</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="health" title="Sort by health"><span>Health</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
           <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="corrections" title="Sort by corrections"><span>Corrections</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
-          <th scope="col">Authentication</th>
+          <th scope="col" aria-sort="none"><button type="button" class="satellite-sort" data-sort="authentication" title="Sort by navigation-data authentication"><span>Authentication</span><span class="material-symbols-outlined" aria-hidden="true">unfold_more</span></button></th>
         </tr></thead><tbody id="satellite-rows"><tr><td colspan="8">Waiting for satellite data.</td></tr></tbody></table></div></section>
       </div>
     </section>
@@ -253,7 +269,9 @@
           <legend>GNSS integrity features</legend>
           <label class="toggle"><input id="enable-osnma" type="checkbox" checked> Enable Galileo OSNMA</label>
           <label class="toggle"><input id="enable-has" type="checkbox"> Enable Galileo HAS</label>
+          <label class="toggle"><input id="strict-osnma" type="checkbox"> Use authenticated navigation data only (strict mode)</label>
           <p id="has-support-note" role="status" hidden>HAS is not supported by the selected F9P receiver; Galileo E6 reception is required.</p>
+          <p id="strict-osnma-support-note" role="status" hidden>Strict mode is available on the selected X20 receiver only.</p>
           <p id="gnss-integrity-warning" role="status" aria-live="polite" hidden>u-blox HPG 2.10/2.11 release notes state Galileo HAS and OSNMA cannot be enabled together. Selecting both is unsupported and may affect OSNMA authentication.</p>
         </fieldset>
         <fieldset class="position-source-settings">
@@ -277,6 +295,72 @@
   </dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="insight.js"></script>
+  <script>
+    (function () {
+      let appStarted = false;
+      function satelliteLibraryReady() {
+        const library = window.satellite;
+        return Boolean(library?.twoline2satrec && library?.propagate && library?.eciToEcf
+          && library?.ecfToLookAngles && library?.degreesToRadians && library?.radiansToDegrees && library?.gstime);
+      }
+      function startApp() {
+        if (appStarted) return;
+        appStarted = true;
+        window.GNSSSatellitePredictionsEnabled = satelliteLibraryReady();
+        const app = document.createElement("script");
+        app.src = "insight.js";
+        document.body.appendChild(app);
+      }
+      function loadLibrary(onlineUrl, localUrl, available, label, next) {
+        function tryLoad(url, fallback) {
+          const script = document.createElement("script");
+          script.src = url;
+          script.onload = function () {
+            if (available()) next();
+            else fallback();
+          };
+          script.onerror = fallback;
+          document.head.appendChild(script);
+        }
+        tryLoad(onlineUrl, function () {
+          if (localUrl) {
+            tryLoad(localUrl, function () {
+              console.warn(`Could not load ${label} online or locally.`);
+              next();
+            });
+          } else {
+            console.warn(`Could not load ${label} online or locally.`);
+            next();
+          }
+        });
+      }
+      loadLibrary(
+        "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", "leaflet.js",
+        function () { return Boolean(window.L); }, "Leaflet",
+        function () {
+          loadLibrary(
+            "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js", "maplibre-gl.js",
+            function () { return Boolean(window.maplibregl); }, "MapLibre GL",
+            function () {
+              loadLibrary(
+                "https://cdn.jsdelivr.net/npm/satellite.js@6.0.1/dist/satellite.min.js", "satellite.min.js",
+                satelliteLibraryReady, "satellite.js",
+                function () {
+                  window.GNSSSatellitePredictionsEnabled = satelliteLibraryReady();
+                  loadLibrary(
+                    "https://cdn.jsdelivr.net/gh/christian-skjetne/PRN-to-skymap@83bfc7155df1d13ab84f9569e2764554ef76d110/gnss-api.js",
+                    "gnss-api.js",
+                    function () { return Boolean(window.GNSSSatelliteAPI?.calculate); },
+                    "GNSS Sky Map API",
+                    startApp,
+                  );
+                },
+              );
+            },
+          );
+        },
+      );
+    })();
+  </script>
 </body>
 </html>

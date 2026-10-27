@@ -9,7 +9,7 @@ const monCommsProbe = fs.existsSync(monCommsProbePath) ? require(monCommsProbePa
 const source = fs.readFileSync(path.join(__dirname, "..", "insight.js"), "utf8").replace(/\r\n/g, "\n");
 
 function loadFunctions(names, globals) {
-  const context = vm.createContext({ SIGNAL_TOW_DISCONTINUITY_MS: 10000, latestAuthenticatedTimeCheck: null, lastAppliedAuthenticatedTimeCheck: null, requestAnimationFrame(callback) { callback(); }, scheduleSignalDraw() { globals.drawSignals?.(); }, ...globals });
+  const context = vm.createContext({ SIGNAL_TOW_DISCONTINUITY_MS: 10000, latestAuthenticatedTimeCheck: null, lastAppliedAuthenticatedTimeCheck: null, satellitePredictionsEnabled: true, requestAnimationFrame(callback) { callback(); }, scheduleSignalDraw() { globals.drawSignals?.(); }, ...globals });
   const functions = names.map((name) => {
     const declaration = new RegExp(`  (?:async )?function ${name}\\(`).exec(source);
     const start = declaration?.index ?? -1;
@@ -30,6 +30,85 @@ function workingStatus() {
 
 test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
+});
+
+test("offline library copies are used before starting the app", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const loader = /<script>\s*((?:\s|.)*?)\s*<\/script>\s*<\/body>/.exec(html);
+  assert.ok(loader, "Expected inline GNSS API loader before the end of the document");
+  const scripts = [];
+  const document = {
+    createElement(tag) {
+      assert.equal(tag, "script");
+      return {};
+    },
+    head: { appendChild(script) { scripts.push(script); } },
+    body: { appendChild(script) { scripts.push(script); } },
+  };
+  const window = {};
+  vm.runInNewContext(loader[1], { document, window, console: { warn() {} } });
+
+  assert.match(scripts[0].src, /^https:\/\/unpkg\.com\/leaflet@.+\/leaflet\.js$/);
+  scripts[0].onerror();
+  assert.equal(scripts[1].src, "leaflet.js");
+  window.L = {};
+  scripts[1].onload();
+  assert.match(scripts[2].src, /^https:\/\/unpkg\.com\/maplibre-gl@.+\/maplibre-gl\.js$/);
+  scripts[2].onerror();
+  assert.equal(scripts[3].src, "maplibre-gl.js");
+  window.maplibregl = {};
+  scripts[3].onload();
+  assert.match(scripts[4].src, /^https:\/\/cdn\.jsdelivr\.net\/npm\/satellite\.js@.+\/satellite\.min\.js$/);
+  scripts[4].onerror();
+  assert.equal(scripts[5].src, "satellite.min.js");
+  window.satellite = {
+    twoline2satrec() {}, propagate() {}, eciToEcf() {}, ecfToLookAngles() {},
+    degreesToRadians() {}, radiansToDegrees() {}, gstime() {},
+  };
+  scripts[5].onload();
+  assert.match(scripts[6].src, /^https:\/\/cdn\.jsdelivr\.net\/gh\/.+\/gnss-api\.js$/);
+  scripts[6].onerror();
+  assert.equal(scripts[7].src, "gnss-api.js");
+  window.GNSSSatelliteAPI = { calculate() {} };
+  scripts[7].onload();
+  assert.equal(scripts[8].src, "insight.js");
+  assert.equal(window.GNSSSatellitePredictionsEnabled, true);
+});
+
+test("app starts with TLE predictions disabled when satellite.js is unavailable", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const loader = /<script>\s*((?:\s|.)*?)\s*<\/script>\s*<\/body>/.exec(html);
+  const scripts = [];
+  const document = {
+    createElement() { return {}; },
+    head: { appendChild(script) { scripts.push(script); } },
+    body: { appendChild(script) { scripts.push(script); } },
+  };
+  const window = {};
+  vm.runInNewContext(loader[1], { document, window, console: { warn() {} } });
+
+  scripts[0].onerror();
+  scripts[1].onerror();
+  scripts[2].onerror();
+  scripts[3].onerror();
+  scripts[4].onerror();
+  scripts[5].onerror();
+  scripts[6].onerror();
+  scripts[7].onerror();
+  assert.equal(scripts[8].src, "insight.js");
+  assert.equal(window.GNSSSatellitePredictionsEnabled, false);
+});
+
+test("missing satellite.js disables prediction work but reports that live satellite data remains active", async () => {
+  const context = loadFunctions(["renderSatellitePredictionComparison", "requestSatelliteOrbitPredictions"], {
+    satellitePredictionsEnabled: false,
+    satellitePredictionStatus: { textContent: "" },
+    satelliteComparisonRows: { innerHTML: "" },
+  });
+  context.renderSatellitePredictionComparison([], null, [], "NAV", null, Date.now());
+  await context.requestSatelliteOrbitPredictions("NAV");
+  assert.match(context.satellitePredictionStatus.textContent, /satellite\.js could not be loaded/);
+  assert.match(context.satelliteComparisonRows.innerHTML, /live satellite data is still active/);
 });
 
 test("compact mode defaults off and preserves only boolean saved choices", () => {
@@ -56,7 +135,7 @@ test("compact mode applies and removes the layout class", () => {
 });
 
 test("legacy settings use enabled map and interface defaults and preserve explicit choices", () => {
-  const defaults = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "x20", baudByReceiver: { f9p: 115200, x20: 38400 } };
+  const defaults = { configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, strictOsnma: false, satelliteLocationLocked: false, satelliteLocationMode: "receiver", satelliteLockedLatitude: null, satelliteLockedLongitude: null, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "x20", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const context = loadFunctions(["loadSettings"], {
     DEFAULT_SETTINGS: defaults,
     SETTINGS_KEY: "settings",
@@ -66,6 +145,7 @@ test("legacy settings use enabled map and interface defaults and preserve explic
   assert.equal(settings.configureAllInterfaces, true);
   assert.equal(settings.enableOsnma, true);
   assert.equal(settings.enableGalHas, false);
+  assert.equal(settings.strictOsnma, false);
   assert.equal(settings.positionSource, "NAV");
   assert.equal(settings.darkMap, true);
   assert.equal(settings.lastReceiver, "x20");
@@ -73,11 +153,16 @@ test("legacy settings use enabled map and interface defaults and preserve explic
   const explicitContext = loadFunctions(["loadSettings"], {
     DEFAULT_SETTINGS: defaults,
     SETTINGS_KEY: "settings",
-    localStorage: { getItem: () => JSON.stringify({ configureAllInterfaces: false, darkMap: false }) },
+    localStorage: { getItem: () => JSON.stringify({ configureAllInterfaces: false, darkMap: false, strictOsnma: true, satelliteLocationLocked: true, satelliteLocationMode: "manual", satelliteLockedLatitude: 64.1, satelliteLockedLongitude: -21.9 }) },
   });
   const explicitSettings = explicitContext.loadSettings();
   assert.equal(explicitSettings.configureAllInterfaces, false);
   assert.equal(explicitSettings.darkMap, false);
+  assert.equal(explicitSettings.strictOsnma, true);
+  assert.equal(explicitSettings.satelliteLocationLocked, true);
+  assert.equal(explicitSettings.satelliteLocationMode, "manual");
+  assert.equal(explicitSettings.satelliteLockedLatitude, 64.1);
+  assert.equal(explicitSettings.satelliteLockedLongitude, -21.9);
   assert.equal(explicitSettings.lastReceiver, "x20");
   const f9pContext = loadFunctions(["loadSettings"], {
     DEFAULT_SETTINGS: defaults,
@@ -133,20 +218,27 @@ test("HAS diagnostics stays collapsed when disabled or unsupported and returns w
 
 test("HAS settings disable on F9P and warn for the unsupported X20 combination", () => {
   const label = { title: "" };
+  const strictLabel = { title: "" };
   const context = loadFunctions(["updateGnssIntegritySettingsForm"], {
     receiver: { value: "f9p" },
     enableOsnma: { checked: true },
     enableGalHas: { checked: true, disabled: false, title: "", closest: () => label },
+    strictOsnma: { checked: false, disabled: false, title: "", closest: () => strictLabel },
+    strictOsnmaSupportNote: { hidden: true },
     hasSupportNote: { hidden: true },
     gnssIntegrityWarning: { hidden: true },
   });
   context.updateGnssIntegritySettingsForm();
   assert.equal(context.enableGalHas.disabled, true);
+  assert.equal(context.strictOsnma.disabled, true);
+  assert.equal(context.strictOsnmaSupportNote.hidden, false);
   assert.equal(context.hasSupportNote.hidden, false);
   assert.equal(context.gnssIntegrityWarning.hidden, true);
   context.receiver.value = "x20";
   context.updateGnssIntegritySettingsForm();
   assert.equal(context.enableGalHas.disabled, false);
+  assert.equal(context.strictOsnma.disabled, false);
+  assert.equal(context.strictOsnmaSupportNote.hidden, true);
   assert.equal(context.hasSupportNote.hidden, true);
   assert.equal(context.gnssIntegrityWarning.hidden, false);
 });
@@ -942,16 +1034,23 @@ test("UBX dispatcher routes MON-VER responses", () => {
   assert.deepEqual(received, [payload]);
 });
 
-test("HAS configuration is only sent to X20 and feature values follow settings", () => {
+test("GNSS integrity configuration is receiver-specific and follows settings", () => {
   const context = loadFunctions(["gnssFeatureConfigurationRequests"], {});
-  const requests = (receiverName, enableOsnma, enableGalHas) => JSON.parse(JSON.stringify(context.gnssFeatureConfigurationRequests(receiverName, enableOsnma, enableGalHas)));
+  const requests = (receiverName, enableOsnma, enableGalHas, strictOsnma) => JSON.parse(JSON.stringify(context.gnssFeatureConfigurationRequests(receiverName, enableOsnma, enableGalHas, strictOsnma)));
   assert.deepEqual(requests("x20", true, true), [
     ["Galileo OSNMA", 0x10350005, 1, 1],
     ["Galileo HAS", 0x100d0002, 1, 1],
+    ["Authenticated navigation data only", 0x101100dd, 0, 1],
   ]);
   assert.deepEqual(requests("x20", false, false), [
     ["Galileo OSNMA", 0x10350005, 0, 1],
     ["Galileo HAS", 0x100d0002, 0, 1],
+    ["Authenticated navigation data only", 0x101100dd, 0, 1],
+  ]);
+  assert.deepEqual(requests("x20", true, false, true), [
+    ["Galileo OSNMA", 0x10350005, 1, 1],
+    ["Galileo HAS", 0x100d0002, 0, 1],
+    ["Authenticated navigation data only", 0x101100dd, 1, 1],
   ]);
   assert.deepEqual(requests("f9p", true, true), [["Galileo OSNMA", 0x10350005, 1, 1]]);
 });
@@ -1064,7 +1163,7 @@ test("sky labels avoid elevation captions and omit below-horizon markers", () =>
   const drawing = new Proxy({ fillText(text, x, y) { labels.push({ text, x, y }); }, measureText: () => ({ width: 14 }) }, {
     get(target, property) { return target[property] ?? (() => {}); },
   });
-  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "gnssColor"], {
+  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "satellitePrn", "satelliteGnssIdFromPrn", "gnssColor"], {
     satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
   });
   context.drawSatelliteSky([
@@ -1082,7 +1181,7 @@ test("sky uses square corrected markers independently of solution use", () => {
   const drawing = new Proxy({ rect() { markers.push("square"); }, arc(centerX, centerY, radius) { if (radius === 5) markers.push("circle"); }, measureText: () => ({ width: 14 }) }, {
     get(target, property) { return target[property] ?? (() => {}); },
   });
-  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "gnssColor"], {
+  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "satellitePrn", "satelliteGnssIdFromPrn", "gnssColor"], {
     satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
   });
   context.drawSatelliteSky([
@@ -1091,6 +1190,64 @@ test("sky uses square corrected markers independently of solution use", () => {
     { gnssId: 2, svId: 3, elevation: 45, azimuth: 180, used: false, correctionsUsed: true },
   ]);
   assert.deepEqual(markers, ["circle", "square", "square"]);
+});
+
+test("online TLE sky markers use distinct, enlarged crosshairs and PRN-matched connector lines", () => {
+  const commands = [];
+  const drawing = new Proxy({
+    beginPath() { commands.push(["beginPath"]); },
+    moveTo(x, y) { commands.push(["moveTo", x, y]); },
+    lineTo(x, y) { commands.push(["lineTo", x, y]); },
+    arc(x, y, radius) { commands.push(["arc", x, y, radius]); },
+    stroke() { commands.push(["stroke", this.strokeStyle]); },
+    measureText: () => ({ width: 14 }),
+  }, {
+    get(target, property) { return target[property] ?? (() => {}); },
+  });
+  const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "satellitePrn", "satelliteGnssIdFromPrn", "gnssColor"], {
+    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
+    gnssColor(gnssId) { return ["#ffb347", "#00ffff", "#66ff88", "#ff7262", "#ffffff", "#ffff66", "#f27bfd", "#88aaff"][gnssId] || "#aaaaaa"; },
+  });
+  context.drawSatelliteSky([
+    { gnssId: 0, svId: 5, elevation: 45, azimuth: 0, used: true },
+    { gnssId: 2, svId: 12, elevation: 45, azimuth: 180, used: true },
+  ], [
+    { PRN: "G05", AZIMUTH: 90, ELEVATION: 45 },
+    { PRN: "E13", AZIMUTH: 270, ELEVATION: 45 },
+  ]);
+  assert.equal(context.satelliteSkyPoints.filter(({ kind }) => kind === "orbit").length, 2);
+  assert.equal(commands.filter(([command, color]) => command === "stroke" && color === "#ffb347").length, 3);
+  assert.equal(commands.filter(([command, color]) => command === "stroke" && color === "#66ff88").length, 2);
+  const crosshairMoves = commands.filter(([command, x]) => command === "moveTo" && (x === context.satelliteSkyPoints[2].x - 11 || x === context.satelliteSkyPoints[2].x + 2));
+  assert.equal(crosshairMoves.length, 2);
+  assert.ok(!commands.some(([command, , , radius]) => command === "arc" && radius === 7));
+});
+
+test("online sky-map constellation filters select matching predictions or hide all predictions", () => {
+  const context = loadFunctions(["satelliteGnssIdFromPrn", "satellitePrn", "selectedSatellitePredictions"], {});
+  const predictions = ["G05", "S20", "E12", "C03", "J02", "R08", "I01"].map((PRN) => ({ PRN }));
+  const selected = context.selectedSatellitePredictions(predictions, new Set([0, 2, 6]));
+  assert.deepEqual(Array.from(selected, ({ PRN }) => PRN), ["G05", "E12", "R08"]);
+  assert.deepEqual(Array.from(context.selectedSatellitePredictions(predictions, new Set([0, 2, 6]), false)), []);
+  assert.equal(context.satelliteGnssIdFromPrn("X01"), null);
+});
+
+test("used-only satellite filter hides predictions without a used live PRN match", () => {
+  const context = loadFunctions(["satelliteGnssIdFromPrn", "satellitePrn", "selectedSatellitePredictions"], {});
+  const predictions = [{ PRN: "G05" }, { PRN: "G06" }, { PRN: "E12" }, { PRN: "R08" }];
+  const usedSatellites = [
+    { gnssId: 0, svId: 5, used: true },
+    { gnssId: 2, svId: 12, used: true },
+  ];
+  assert.deepEqual(
+    Array.from(context.selectedSatellitePredictions(predictions, new Set([0, 2, 6]), true, usedSatellites), ({ PRN }) => PRN),
+    ["G05", "E12"],
+  );
+  assert.deepEqual(
+    Array.from(context.selectedSatellitePredictions(predictions, new Set([0, 2, 6])), ({ PRN }) => PRN),
+    ["G05", "G06", "E12", "R08"],
+  );
+  assert.deepEqual(Array.from(context.selectedSatellitePredictions(predictions, new Set([0, 2, 6]), true, [])), []);
 });
 
 test("satellite filters and numeric sorting keep unknown positions last", () => {
@@ -1131,6 +1288,205 @@ test("satellite correction sorting follows displayed text in both directions wit
   assert.deepEqual(report.satellites.map((satellite) => satellite.svId), [9, 4, 3, 2, 5]);
 });
 
+test("satellite authentication sorting follows authentication state and keeps unknown values last", () => {
+  const context = loadFunctions(["selectedSatellites", "satelliteAuthentication"], {});
+  const report = { iTow: 123000, satellites: [
+    { gnssId: 2, svId: 4 },
+    { gnssId: 2, svId: 3 },
+    { gnssId: 2, svId: 2 },
+    { gnssId: 2, svId: 1 },
+  ] };
+  const authReport = { iTow: 123000, satellites: [
+    { gnssId: 2, svId: 1, authenticatedSignalCount: 1, signalCount: 1 },
+    { gnssId: 2, svId: 2, authenticatedSignalCount: 0, signalCount: 1 },
+    { gnssId: 2, svId: 3, authenticatedSignalCount: 1, signalCount: 2 },
+  ] };
+  const ids = (direction) => Array.from(
+    context.selectedSatellites(report, new Set([2]), { key: "authentication", direction }, false, authReport),
+    (satellite) => satellite.svId,
+  );
+  assert.deepEqual(ids(1), [1, 3, 2, 4]);
+  assert.deepEqual(ids(-1), [2, 3, 1, 4]);
+});
+
+test("satellite PRNs map to GNSS Sky Map prefixes and azimuth deltas wrap at north", () => {
+  const context = loadFunctions(["satellitePrn", "satelliteAzimuthDifference"], {});
+  assert.equal(context.satellitePrn({ gnssId: 0, svId: 5 }), "G05");
+  assert.equal(context.satellitePrn({ gnssId: 2, svId: 12 }), "E12");
+  assert.equal(context.satellitePrn({ gnssId: 7, svId: 3 }), "I03");
+  assert.equal(context.satellitePrn({ gnssId: 4, svId: 1 }), null);
+  assert.equal(context.satelliteAzimuthDifference(1, 359), 2);
+  assert.equal(context.satelliteAzimuthDifference(359, 1), -2);
+});
+
+test("sky-map location lock supports fresh receiver snapshots and independent manual coordinates", () => {
+  const context = loadFunctions(["validSatelliteLocation", "satelliteObserverLocation"], {
+    settings: { satelliteLocationLocked: false, satelliteLocationMode: "receiver", satelliteLockedLatitude: null, satelliteLockedLongitude: null },
+    satelliteLocationLatitude: { value: "64.1" },
+    satelliteLocationLongitude: { value: "-21.9" },
+    positionComparisonState: { latest: { NAV: { positionValid: true, latitude: 52.52, longitude: 13.405, receivedAt: 1000 } } },
+  });
+  assert.deepEqual({ ...context.satelliteObserverLocation("NAV", 2000) }, { latitude: 52.52, longitude: 13.405, mode: "receiver-live" });
+  context.settings.satelliteLocationLocked = true;
+  assert.deepEqual({ ...context.satelliteObserverLocation("NAV", 2000) }, { error: "No NAV-PVT location is saved. Wait for a valid receiver fix, then enable the lock." });
+  context.settings.satelliteLockedLatitude = 52.52;
+  context.settings.satelliteLockedLongitude = 13.405;
+  assert.deepEqual({ ...context.satelliteObserverLocation("NAV", 9000) }, { latitude: 52.52, longitude: 13.405, mode: "receiver-locked" });
+  context.settings.satelliteLocationMode = "manual";
+  assert.deepEqual({ ...context.satelliteObserverLocation("NAV", 9000) }, { latitude: 64.1, longitude: -21.9, mode: "manual" });
+  context.satelliteLocationLatitude.value = "";
+  assert.match(context.satelliteObserverLocation("NAV", 9000).error, /Enter a valid latitude/);
+  assert.equal(context.validSatelliteLocation(90, 180), true);
+  assert.equal(context.validSatelliteLocation(90.1, 0), false);
+});
+
+test("live receiver movement keeps nearby TLE positions visible until the refresh threshold", () => {
+  const context = loadFunctions(["satelliteLocationDistanceMetres", "matchingSatellitePredictions"], {
+    satelliteOrbitState: {
+      source: "NAV", resultLocation: { latitude: 52.52, longitude: 13.405, mode: "receiver-live" },
+      positions: [{ PRN: "G05", AZIMUTH: 20, ELEVATION: 30 }],
+    },
+  });
+  const nearby = { latitude: 52.524, longitude: 13.405, mode: "receiver-live" };
+  const movedFar = { latitude: 52.54, longitude: 13.405, mode: "receiver-live" };
+  assert.ok(context.satelliteLocationDistanceMetres(context.satelliteOrbitState.resultLocation, nearby) < 1000);
+  assert.equal(context.matchingSatellitePredictions("NAV", nearby).length, 1);
+  assert.equal(context.matchingSatellitePredictions("NAV", movedFar).length, 0);
+  assert.equal(context.matchingSatellitePredictions("NAV2", nearby).length, 0);
+  assert.equal(context.matchingSatellitePredictions("NAV", { ...nearby, mode: "manual" }).length, 0);
+});
+
+test("online orbit predictions use the selected valid position and filter malformed results", async () => {
+  const requests = [];
+  let renders = 0;
+  const context = loadFunctions(["restoreSatelliteManualFeeds", "requestSatelliteOrbitPredictions"], {
+    SATELLITE_TLE_UPLOAD_CACHE_KEY: "tle-cache", SATELLITE_METADATA_UPLOAD_CACHE_KEY: "metadata-cache",
+    satelliteManualFeeds: { loaded: false, tleText: null, tleName: null, tleSavedAt: null, metadataText: null, metadataName: null, metadataSavedAt: null, storageErrors: { tle: null, metadata: null } },
+    localStorage: { getItem: () => null },
+    satelliteObserverLocation: () => ({ latitude: 64.1, longitude: -21.9, mode: "manual" }),
+    window: { GNSSSatelliteAPI: { calculate: async (request) => {
+      requests.push(request);
+      return [
+        { PRN: "G05", AZIMUTH: 20, ELEVATION: 30 },
+        { PRN: "bad", AZIMUTH: 10, ELEVATION: 20 },
+        { PRN: "E12", AZIMUTH: NaN, ELEVATION: 40 },
+      ];
+    } } },
+    positionComparisonState: { latest: { NAV: { positionValid: true, latitude: 52.52, longitude: 13.405, receivedAt: 1000 } } },
+    satelliteOrbitState: { source: null, positions: [], location: null, updatedAt: 0, attemptedAt: 0, loading: false, error: null, requestId: 0 },
+    satellitePredictionStatus: { textContent: "" }, satellitePredictionRefresh: { textContent: "" },
+    renderSatellites() { renders += 1; },
+  });
+  const beforeRequest = Date.now();
+  await context.requestSatelliteOrbitPredictions("NAV", 1000);
+  const afterRequest = Date.now();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].LAT, 64.1);
+  assert.equal(requests[0].LON, -21.9);
+  assert.equal(typeof requests[0]["UTC-TIME"].getTime, "function");
+  assert.ok(requests[0]["UTC-TIME"].getTime() >= beforeRequest);
+  assert.ok(requests[0]["UTC-TIME"].getTime() <= afterRequest);
+  assert.notEqual(requests[0]["UTC-TIME"].getTime(), 1000);
+  assert.deepEqual(Array.from(context.satelliteOrbitState.positions, ({ PRN }) => PRN), ["G05"]);
+  assert.equal(context.satelliteOrbitState.loading, false);
+  assert.equal(renders, 1);
+});
+
+test("uploaded GNSS-Radar PRN maps parse NORAD mappings and normalize QZSS labels", () => {
+  const context = loadFunctions(["parseUploadedPrnMap"], {});
+  const mapping = 'const PRNMAP = {"12345":"E12","23456":"Q193","34567":"G05"};';
+  const parsed = context.parseUploadedPrnMap(mapping);
+  assert.equal(parsed.get(12345), "E12");
+  assert.equal(parsed.get(23456), "J01");
+  assert.equal(parsed.get(34567), "G05");
+  assert.throws(() => context.parseUploadedPrnMap("not a PRN map"), /does not contain a GNSS-Radar PRNMAP/);
+  assert.throws(() => context.parseUploadedPrnMap('const PRNMAP = {"12345":"unknown"};'), /Invalid PRN mapping/);
+});
+
+test("uploaded TLE imports calculate predictions and persist source files for later sessions", async () => {
+  const storage = new Map();
+  const library = {
+    twoline2satrec: (line1, line2) => ({ line1, line2 }),
+    degreesToRadians: (degrees) => degrees * Math.PI / 180,
+    radiansToDegrees: (radians) => radians * 180 / Math.PI,
+    propagate: () => ({ position: { x: 1 } }),
+    gstime: () => 0,
+    eciToEcf: (position) => position,
+    ecfToLookAngles: () => ({ azimuth: Math.PI / 2, elevation: Math.PI / 6 }),
+  };
+  const context = loadFunctions([
+    "restoreSatelliteManualFeeds", "saveSatelliteManualFeed", "parseUploadedPrnMap",
+    "parseUploadedSatelliteTle", "calculateUploadedSatellitePredictions", "importSatelliteFeedFiles",
+  ], {
+    SATELLITE_TLE_UPLOAD_CACHE_KEY: "tle-cache",
+    SATELLITE_METADATA_UPLOAD_CACHE_KEY: "metadata-cache",
+    satelliteManualFeeds: { loaded: false, tleText: null, tleName: null, tleSavedAt: null, metadataText: null, metadataName: null, metadataSavedAt: null, storageErrors: { tle: null, metadata: null } },
+    localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+    window: { satellite: library },
+  });
+  const tle = ["TEST SAT (G 05)", "1 12345U 20001A   26001.00000000  .00000000  00000-0  00000-0 0  9999", "2 12345  55.0000  10.0000 0001000  20.0000  30.0000 15.00000000123456"].join("\n");
+  const metadata = 'const PRNMAP = {"12345":"E12"};';
+  const imported = await context.importSatelliteFeedFiles([
+    { name: "gnss.tle", text: async () => tle },
+    { name: "prnmap.js", text: async () => metadata },
+  ]);
+  assert.equal(imported.persistent, true);
+  assert.equal(imported.ready, true);
+  assert.equal(imported.tleName, "gnss.tle");
+  assert.equal(imported.metadataName, "prnmap.js");
+  const records = context.parseUploadedSatelliteTle(tle, metadata);
+  assert.equal(records[0].PRN, "E12");
+  const calculated = context.calculateUploadedSatellitePredictions(records, 64.1, -21.9, new Date("2026-01-01T00:00:00Z"));
+  assert.equal(calculated[0].PRN, "E12");
+  assert.equal(calculated[0].AZIMUTH, 90);
+  assert.ok(Math.abs(calculated[0].ELEVATION - 30) < 1e-10);
+  const reloaded = loadFunctions(["restoreSatelliteManualFeeds"], {
+    SATELLITE_TLE_UPLOAD_CACHE_KEY: "tle-cache",
+    SATELLITE_METADATA_UPLOAD_CACHE_KEY: "metadata-cache",
+    satelliteManualFeeds: { loaded: false, tleText: null, tleName: null, tleSavedAt: null, metadataText: null, metadataName: null, metadataSavedAt: null, storageErrors: { tle: null, metadata: null } },
+    localStorage: { getItem: (key) => storage.get(key) ?? null },
+  });
+  reloaded.restoreSatelliteManualFeeds();
+  assert.equal(reloaded.satelliteManualFeeds.tleText, tle);
+  assert.equal(reloaded.satelliteManualFeeds.metadataText, metadata);
+});
+
+test("prediction status explains that imported PRN mapping requires an imported TLE", () => {
+  const context = loadFunctions(["renderSatellitePredictionComparison"], {
+    window: { GNSSSatelliteAPI: { calculate() {}, getStatus: () => ({ cache: {}, errors: { metadata: { message: "Failed to fetch" } } }) } },
+    restoreSatelliteManualFeeds() {},
+    satelliteManualFeeds: { metadataText: 'const PRNMAP = {"12345":"E12"};', tleText: null },
+    satelliteOrbitState: { loading: false, source: "NAV", error: null, updatedAt: 1000, manual: false },
+    satellitePredictionStatus: { textContent: "", title: "" },
+    satelliteComparisonRows: { innerHTML: "" },
+  });
+  context.renderSatellitePredictionComparison([], null, [], "NAV", { latitude: 0, longitude: 0, mode: "manual" }, 2000);
+  assert.match(context.satellitePredictionStatus.textContent, /imported mapping is saved, but import a TLE file to use it/);
+});
+
+test("online satellite comparison colors constellation names like the live satellite table", () => {
+  const context = loadFunctions([
+    "renderSatellitePredictionComparison", "satellitePrn", "satelliteGnssName", "satelliteAzimuthDifference", "gnssColor",
+  ], {
+    window: { GNSSSatelliteAPI: { calculate() {}, getStatus: () => ({ cache: {}, errors: {} }) } },
+    restoreSatelliteManualFeeds() {},
+    satelliteManualFeeds: { tleName: null, metadataName: null, tleSavedAt: null, storageErrors: {} },
+    satelliteOrbitState: { loading: false, source: "NAV", error: null, updatedAt: 1000, manual: false },
+    satellitePredictionStatus: { textContent: "", title: "" },
+    satelliteComparisonRows: { innerHTML: "" },
+    gnssColor: (gnssId) => ["#ffb347", "#00ffff", "#66ff88"][gnssId],
+  });
+  context.renderSatellitePredictionComparison(
+    [{ gnssId: 2, svId: 12, azimuth: 90, elevation: 45 }],
+    { satellites: [] },
+    [{ PRN: "E12", AZIMUTH: 92, ELEVATION: 44 }],
+    "NAV",
+    { latitude: 64.1, longitude: -21.9, mode: "manual" },
+    2000,
+  );
+  assert.match(context.satelliteComparisonRows.innerHTML, /style="color:#66ff88">Galileo 12/);
+});
+
 test("satellite C/N0 history accepts only NAV-SAT while preserving NAV2 reports", () => {
   const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "appendSeries", "appendHistory", "signalSampleEpoch"], {
     satelliteReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
@@ -1162,6 +1518,7 @@ test("satellite C/N0 history accepts only NAV-SAT while preserving NAV2 reports"
 test("NAV-SAT snapshots remain separate for each solution and empty reports clear old satellites", () => {
   const context = loadFunctions(["parseNavSat", "decodeSatelliteReport", "parseHasCorrectionCounts", "resetSatelliteReports", "signalSampleEpoch"], {
     satelliteReports: { NAV: null, NAV2: null }, satelliteAuthReports: { NAV: null, NAV2: null }, hasCorrectionReports: { NAV: null, NAV2: null },
+    satelliteOrbitState: { requestId: 0, source: null, positions: [], location: null, updatedAt: 0, attemptedAt: 0, loading: false, error: null },
     signalEpoch: { latest: null, tow: null }, signalHistory: { cno: new Map() }, replayRebuilding: false,
     signalsEmpty: {}, renderSatellites() {}, renderHasDiagnostics() {}, drawSignals() {}, appendSeries() {}, gnssColor() {},
   });
@@ -1185,14 +1542,19 @@ test("NAV-SAT snapshots remain separate for each solution and empty reports clea
 test("satellites view marks stale data and preserves recorded source selection", () => {
   const option = {};
   const source = { value: "NAV", querySelector: () => option };
-  const context = loadFunctions(["renderSatellites", "selectedSatellites", "satelliteGnssName", "satelliteCorrectionText", "satelliteAuthentication"], {
+  const context = loadFunctions(["renderSatellites", "matchingSatellitePredictions", "selectedSatellitePredictions", "satelliteGnssIdFromPrn", "satellitePrn", "selectedSatellites", "satelliteGnssName", "satelliteCorrectionText", "satelliteAuthentication", "validSatelliteLocation", "satelliteObserverLocation"], {
     satelliteSource: source, satellitesPanel: { hidden: false }, receiver: { value: "x20" },
-    satelliteUsedOnly: { checked: false },
+    satelliteUsedOnly: { checked: false }, satelliteOnlineVisible: { checked: true },
     satelliteReports: { NAV: { iTow: 1000, receivedAt: 1000, satellites: [{ gnssId: 2, svId: 12, cno: 42, elevation: 45, azimuth: 90, used: true, quality: 4, health: 1 }] }, NAV2: null },
     satelliteAuthReports: { NAV: { iTow: 1000, satellites: [{ gnssId: 2, svId: 12, signalCount: 2, authenticatedSignalCount: 1 }] }, NAV2: null },
     satelliteConstellations: new Set([2]), satelliteSort: { key: "id", direction: 1 },
+    positionComparisonState: { latest: { NAV: null, NAV2: null } },
+    satelliteOrbitState: { source: null, positions: [], resultLocation: null },
+    settings: { satelliteLocationLocked: false, satelliteLocationMode: "receiver" },
+    satelliteLocationLatitude: { value: "" }, satelliteLocationLongitude: { value: "" },
     satelliteStatus: { dataset: {} }, satelliteCount: {}, satelliteRows: {}, satelliteTable: { querySelectorAll: () => [] },
-    replayData: null, gnssColor: () => "#66ff88", drawSatelliteSky() {},
+    satellitePredictionStatus: {}, satelliteComparisonRows: {},
+    replayData: null, gnssColor: () => "#66ff88", drawSatelliteSky() {}, renderSatellitePredictionComparison() {}, requestSatelliteOrbitPredictions() {},
   });
   context.renderSatellites(1000);
   assert.match(context.satelliteRows.innerHTML, /Galileo 12.*42.*Used.*Healthy/);
@@ -1381,8 +1743,9 @@ test("NAV/NAV2 separation requires matching valid epochs and uses ellipsoid heig
 
 test("position comparison buffers delayed epochs and rejects invalid fixes without replacing newer pairs", () => {
   const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
+  let skyMapRenders = 0;
   const context = loadFunctions(["recordPositionSolution", "positionSolutionDelta"], {
-    positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {},
+    positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {}, renderSatellites() { skyMapRenders += 1; },
   });
   const payload = (epoch, flags = 1) => {
     const bytes = new Uint8Array(92); const data = new DataView(bytes.buffer);
@@ -1391,7 +1754,9 @@ test("position comparison buffers delayed epochs and rejects invalid fixes witho
     return bytes;
   };
   context.recordPositionSolution(payload(1000), "NAV");
+  assert.equal(skyMapRenders, 1);
   context.recordPositionSolution(payload(2000), "NAV");
+  assert.equal(skyMapRenders, 2);
   context.recordPositionSolution(payload(1000), "NAV2");
   assert.equal(state.pair.NAV.iTow, 1000);
   assert.equal(state.pair.NAV.hAcc, 1.5);
@@ -1442,7 +1807,7 @@ test("receiver configuration enables NAV-DOP and X20 NAV2-DOP at one epoch per r
 test("DOP values are scaled and paired by epoch and source regardless of arrival order", () => {
   const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
   const context = loadFunctions(["recordPositionSolution", "parseNavDop", "resetPositionComparison", "handleUbx", "replayFrameGroup", "signalSampleEpoch", "recordSignalComputerTime"], {
-    positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {},
+    positionComparisonState: state, replayRebuilding: false, renderPositionComparison() {}, renderSatellites() {},
     signalEpoch: { latest: null, tow: null }, drawSignals() {},
     replayData: null, HISTORY_LENGTH: 600,
   });

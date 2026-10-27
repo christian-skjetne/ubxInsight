@@ -11,7 +11,9 @@
   const LIGHT_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
   const SETTINGS_KEY = "ubx-scope-settings-v1";
   const OSNMA_CLOCK_SETTINGS_KEY = "ubx-scope-osnma-clock-v1";
-  const DEFAULT_SETTINGS = { compactMode: false, configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "x20", baudByReceiver: { f9p: 115200, x20: 38400 } };
+  const SATELLITE_TLE_UPLOAD_CACHE_KEY = "ubx-insight-satellite-tle-v1";
+  const SATELLITE_METADATA_UPLOAD_CACHE_KEY = "ubx-insight-satellite-prnmap-v2";
+  const DEFAULT_SETTINGS = { compactMode: false, configureAllInterfaces: true, enableOsnma: true, enableGalHas: false, strictOsnma: false, satelliteLocationLocked: false, satelliteLocationMode: "receiver", satelliteLockedLatitude: null, satelliteLockedLongitude: null, positionSource: "NAV", showAverage: true, averageFrames: 10, showPeak: true, peakDecay: 0.5, darkMap: true, waterfallMinutes: 10, waterfallMarkerMinutes: 5, lastReceiver: "x20", baudByReceiver: { f9p: 115200, x20: 38400 } };
   const DEFAULT_OSNMA_CLOCK_SETTINGS = { useComputerClock: false, accuracySeconds: 1, showLocalTime: false };
   const SPECTRUM_MIN_DB = 0;
   const SPECTRUM_MAX_DB = 240;
@@ -61,6 +63,8 @@
   const settingsReset = document.querySelector("#settings-reset");
   const enableOsnma = document.querySelector("#enable-osnma");
   const enableGalHas = document.querySelector("#enable-has");
+  const strictOsnma = document.querySelector("#strict-osnma");
+  const strictOsnmaSupportNote = document.querySelector("#strict-osnma-support-note");
   const hasSupportNote = document.querySelector("#has-support-note");
   const gnssIntegrityWarning = document.querySelector("#gnss-integrity-warning");
   const positionSourceSelect = document.querySelector("#position-source");
@@ -82,16 +86,36 @@
   const satellitesPanel = document.querySelector("#satellites-panel");
   const satelliteSource = document.querySelector("#satellite-source");
   const satelliteUsedOnly = document.querySelector("#satellite-used-only");
+  const satelliteOnlineVisible = document.querySelector("#satellite-online-visible");
   const satelliteStatus = document.querySelector("#satellite-status");
   const satelliteCount = document.querySelector("#satellite-count");
   const satelliteRows = document.querySelector("#satellite-rows");
   const satelliteSky = document.querySelector("#satellite-sky");
+  const satellitePredictionStatus = document.querySelector("#satellite-prediction-status");
+  const satellitePredictionRefresh = document.querySelector("#satellite-prediction-refresh");
+  const satelliteFeedUploadButton = document.querySelector("#satellite-feed-upload-button");
+  const satelliteFeedUpload = document.querySelector("#satellite-feed-upload");
+  const satelliteComparisonRows = document.querySelector("#satellite-comparison-rows");
+  const satelliteLocationLocked = document.querySelector("#satellite-location-locked");
+  const satelliteLocationMode = document.querySelector("#satellite-location-mode");
+  const satelliteManualLocation = document.querySelector("#satellite-manual-location");
+  const satelliteLocationLatitude = document.querySelector("#satellite-location-latitude");
+  const satelliteLocationLongitude = document.querySelector("#satellite-location-longitude");
   const satelliteFilters = document.querySelector("#satellite-constellations");
   const satelliteTable = document.querySelector("#satellite-table");
+  const satellitePredictionsEnabled = window.GNSSSatellitePredictionsEnabled !== false;
+  if (!satellitePredictionsEnabled) {
+    satelliteOnlineVisible.disabled = true;
+    satellitePredictionRefresh.disabled = true;
+    satelliteFeedUploadButton.disabled = true;
+    satelliteFeedUpload.disabled = true;
+  }
   const satelliteReports = { NAV: null, NAV2: null };
   const satelliteAuthReports = { NAV: null, NAV2: null };
   const satelliteConstellations = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
   const satelliteSort = { key: "id", direction: 1 };
+  const satelliteOrbitState = { source: null, positions: [], location: null, resultLocation: null, updatedAt: 0, attemptedAt: 0, loading: false, error: null, manual: false, requestId: 0 };
+  const satelliteManualFeeds = { loaded: false, tleText: null, tleName: null, tleSavedAt: null, metadataText: null, metadataName: null, metadataSavedAt: null, storageErrors: { tle: null, metadata: null } };
   let satelliteSkyPoints = [];
   const signalsTab = document.querySelector("#signals-tab");
   const osnmaTab = document.querySelector("#osnma-tab");
@@ -255,6 +279,7 @@
 
   let statusMessage = status.textContent;
   let receiverTxWarningMessage = "";
+  let receiverConfigurationNeedsApply = false;
   function renderStatusMessage() {
     status.textContent = receiverTxWarningMessage || statusMessage;
     status.title = status.textContent;
@@ -272,7 +297,32 @@
       if (!saved || typeof saved !== "object") return { ...DEFAULT_SETTINGS };
       const baudByReceiver = { ...DEFAULT_SETTINGS.baudByReceiver, ...(saved.baudByReceiver || {}) };
       for (const receiverName of Object.keys(baudByReceiver)) baudByReceiver[receiverName] = Number(baudByReceiver[receiverName]) || DEFAULT_SETTINGS.baudByReceiver[receiverName];
-      return { compactMode: saved.compactMode === true, configureAllInterfaces: typeof saved.configureAllInterfaces === "boolean" ? saved.configureAllInterfaces : DEFAULT_SETTINGS.configureAllInterfaces, enableOsnma: typeof saved.enableOsnma === "boolean" ? saved.enableOsnma : DEFAULT_SETTINGS.enableOsnma, enableGalHas: typeof saved.enableGalHas === "boolean" ? saved.enableGalHas : DEFAULT_SETTINGS.enableGalHas, positionSource: saved.positionSource === "NAV2" ? "NAV2" : DEFAULT_SETTINGS.positionSource, showAverage: typeof saved.showAverage === "boolean" ? saved.showAverage : DEFAULT_SETTINGS.showAverage, averageFrames: Math.max(1, Math.min(120, Number(saved.averageFrames) || DEFAULT_SETTINGS.averageFrames)), showPeak: typeof saved.showPeak === "boolean" ? saved.showPeak : DEFAULT_SETTINGS.showPeak, peakDecay: Math.max(0, Math.min(30, Number(saved.peakDecay) || 0)), darkMap: typeof saved.darkMap === "boolean" ? saved.darkMap : DEFAULT_SETTINGS.darkMap, waterfallMinutes: Math.max(5, Math.min(30, Number(saved.waterfallMinutes) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(saved.waterfallMarkerMinutes) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), lastReceiver: saved.lastReceiver === "f9p" ? "f9p" : "x20", baudByReceiver };
+      const satelliteLockedLatitude = typeof saved.satelliteLockedLatitude === "number" ? saved.satelliteLockedLatitude : NaN;
+      const satelliteLockedLongitude = typeof saved.satelliteLockedLongitude === "number" ? saved.satelliteLockedLongitude : NaN;
+      const satelliteLocationValid = Number.isFinite(satelliteLockedLatitude) && Math.abs(satelliteLockedLatitude) <= 90
+        && Number.isFinite(satelliteLockedLongitude) && Math.abs(satelliteLockedLongitude) <= 180;
+      return {
+        ...DEFAULT_SETTINGS,
+        compactMode: saved.compactMode === true,
+        configureAllInterfaces: typeof saved.configureAllInterfaces === "boolean" ? saved.configureAllInterfaces : DEFAULT_SETTINGS.configureAllInterfaces,
+        enableOsnma: typeof saved.enableOsnma === "boolean" ? saved.enableOsnma : DEFAULT_SETTINGS.enableOsnma,
+        enableGalHas: typeof saved.enableGalHas === "boolean" ? saved.enableGalHas : DEFAULT_SETTINGS.enableGalHas,
+        strictOsnma: typeof saved.strictOsnma === "boolean" ? saved.strictOsnma : DEFAULT_SETTINGS.strictOsnma,
+        satelliteLocationLocked: saved.satelliteLocationLocked === true,
+        satelliteLocationMode: saved.satelliteLocationMode === "manual" ? "manual" : DEFAULT_SETTINGS.satelliteLocationMode,
+        satelliteLockedLatitude: satelliteLocationValid ? satelliteLockedLatitude : null,
+        satelliteLockedLongitude: satelliteLocationValid ? satelliteLockedLongitude : null,
+        positionSource: saved.positionSource === "NAV2" ? "NAV2" : DEFAULT_SETTINGS.positionSource,
+        showAverage: typeof saved.showAverage === "boolean" ? saved.showAverage : DEFAULT_SETTINGS.showAverage,
+        averageFrames: Math.max(1, Math.min(120, Number(saved.averageFrames) || DEFAULT_SETTINGS.averageFrames)),
+        showPeak: typeof saved.showPeak === "boolean" ? saved.showPeak : DEFAULT_SETTINGS.showPeak,
+        peakDecay: Math.max(0, Math.min(30, Number(saved.peakDecay) || 0)),
+        darkMap: typeof saved.darkMap === "boolean" ? saved.darkMap : DEFAULT_SETTINGS.darkMap,
+        waterfallMinutes: Math.max(5, Math.min(30, Number(saved.waterfallMinutes) || DEFAULT_SETTINGS.waterfallMinutes)),
+        waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(saved.waterfallMarkerMinutes) || DEFAULT_SETTINGS.waterfallMarkerMinutes)),
+        lastReceiver: saved.lastReceiver === "f9p" ? "f9p" : "x20",
+        baudByReceiver,
+      };
     } catch { return { ...DEFAULT_SETTINGS }; }
   }
 
@@ -303,7 +353,11 @@
     enableGalHas.disabled = receiver.value !== "x20";
     enableGalHas.title = receiver.value === "x20" ? "Enable Galileo HAS corrections on a supported X20 receiver." : "The selected F9P does not support Galileo E6 reception required for HAS.";
     enableGalHas.closest("label").title = enableGalHas.title;
+    strictOsnma.disabled = receiver.value !== "x20";
+    strictOsnma.title = receiver.value === "x20" ? "Use only signals with authenticated navigation data in the primary navigation solution." : "Strict authenticated-data mode is available for X20 receivers only.";
+    strictOsnma.closest("label").title = strictOsnma.title;
     hasSupportNote.hidden = receiver.value === "x20";
+    strictOsnmaSupportNote.hidden = receiver.value === "x20";
     gnssIntegrityWarning.hidden = receiver.value !== "x20" || !enableOsnma.checked || !enableGalHas.checked;
   }
   function syncPositionSourceForm() {
@@ -315,7 +369,7 @@
   function applyCompactMode() {
     document.body.classList.toggle("compact-mode", settings.compactMode);
   }
-  function syncSettingsForm() { compactMode.checked = settings.compactMode; configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
+  function syncSettingsForm() { compactMode.checked = settings.compactMode; configureAllInterfaces.checked = settings.configureAllInterfaces; enableOsnma.checked = settings.enableOsnma; enableGalHas.checked = settings.enableGalHas; strictOsnma.checked = settings.strictOsnma; updateGnssIntegritySettingsForm(); syncPositionSourceForm(); showAverage.checked = settings.showAverage; averageFrames.value = settings.averageFrames; showPeak.checked = settings.showPeak; peakDecay.value = settings.peakDecay; darkMap.checked = settings.darkMap; receiverBaud.value = String(settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value]); waterfallMinutes.value = settings.waterfallMinutes; waterfallMarkerMinutes.value = settings.waterfallMarkerMinutes; }
   function resetTraceBuffers() { blockViews.forEach((view) => { view.averageHistory = []; view.peak = null; }); }
   function resetWaterfallHistory() {
     blockViews.forEach((view) => {
@@ -1296,7 +1350,10 @@
     sample.hDop = epoch[`${source}HDop`] ?? null;
     if (epoch.NAV && epoch.NAV2 && isNewer(iTow, positionComparisonState.pair?.NAV)) positionComparisonState.pair = { NAV: epoch.NAV, NAV2: epoch.NAV2 };
     while (positionComparisonState.epochs.size > 60) positionComparisonState.epochs.delete(positionComparisonState.epochs.keys().next().value);
-    if (!replayRebuilding) renderPositionComparison();
+    if (!replayRebuilding) {
+      renderPositionComparison();
+      renderSatellites();
+    }
   }
 
   function parseNavDop(payload, source = "NAV") {
@@ -1552,14 +1609,24 @@
   function resetSatelliteReports() {
     satelliteReports.NAV = null; satelliteReports.NAV2 = null;
     satelliteAuthReports.NAV = null; satelliteAuthReports.NAV2 = null;
+    satelliteOrbitState.requestId += 1;
+    satelliteOrbitState.source = null; satelliteOrbitState.positions = []; satelliteOrbitState.location = null; satelliteOrbitState.resultLocation = null; satelliteOrbitState.manual = false;
+    satelliteOrbitState.updatedAt = 0; satelliteOrbitState.attemptedAt = 0; satelliteOrbitState.loading = false; satelliteOrbitState.error = null;
     renderSatellites();
   }
 
-  function selectedSatellites(report, constellations, sort, usedOnly = false) {
+  function selectedSatellites(report, constellations, sort, usedOnly = false, authReport = null) {
     const identity = (satellite) => satellite.gnssId * 256 + satellite.svId;
     const value = (satellite) => sort.key === "id" ? identity(satellite) : satellite[sort.key];
     return (report?.satellites || []).filter((satellite) => constellations.has(satellite.gnssId) && (!usedOnly || satellite.used)).sort((left, right) => {
       if (sort.key === "corrections") return satelliteCorrectionText(left).localeCompare(satelliteCorrectionText(right)) * sort.direction || identity(left) - identity(right);
+      if (sort.key === "authentication") {
+        const leftAuthentication = satelliteAuthentication(left, report, authReport).label;
+        const rightAuthentication = satelliteAuthentication(right, report, authReport).label;
+        if (leftAuthentication === "Unknown") return rightAuthentication === "Unknown" ? identity(left) - identity(right) : 1;
+        if (rightAuthentication === "Unknown") return -1;
+        return leftAuthentication.localeCompare(rightAuthentication) * sort.direction || identity(left) - identity(right);
+      }
       const leftValue = value(left); const rightValue = value(right);
       if (leftValue === null || leftValue === undefined) return rightValue === null || rightValue === undefined ? identity(left) - identity(right) : 1;
       if (rightValue === null || rightValue === undefined) return -1;
@@ -1572,7 +1639,7 @@
     if (receiver.value !== "x20" && satelliteSource.value === "NAV2") satelliteSource.value = "NAV";
     if (satellitesPanel.hidden) return;
     const source = satelliteSource.value; const report = satelliteReports[source];
-    const satellites = selectedSatellites(report, satelliteConstellations, satelliteSort, satelliteUsedOnly.checked);
+    const satellites = selectedSatellites(report, satelliteConstellations, satelliteSort, satelliteUsedOnly.checked, satelliteAuthReports[source]);
     const stale = report && !replayData && now - report.receivedAt > 5000;
     satelliteStatus.dataset.state = !report ? "waiting" : stale ? "stale" : "current";
     satelliteStatus.textContent = !report ? `Waiting for ${source}-SAT` : `${source}-SAT | iTOW ${report.iTow} ms${stale ? ` | stale (${((now - report.receivedAt) / 1000).toFixed(1)} s)` : ""}${replayData ? " | recorded" : ""}`;
@@ -1588,10 +1655,388 @@
       button.closest("th").setAttribute("aria-sort", active ? satelliteSort.direction === 1 ? "ascending" : "descending" : "none");
       button.querySelector(".material-symbols-outlined").textContent = active ? satelliteSort.direction === 1 ? "arrow_upward" : "arrow_downward" : "unfold_more";
     }
-    drawSatelliteSky(satellites);
+    const location = satelliteObserverLocation(source, now);
+    const predictions = matchingSatellitePredictions(source, location);
+    renderSatellitePredictionComparison(satellites, report, predictions, source, location, now);
+    const usedSatellites = satelliteUsedOnly.checked ? satellites : null;
+    drawSatelliteSky(satellites, selectedSatellitePredictions(predictions, satelliteConstellations, satelliteOnlineVisible.checked, usedSatellites));
+    requestSatelliteOrbitPredictions(source, now);
   }
 
-  function drawSatelliteSky(satellites) {
+  function satellitePrn(satellite) {
+    const prefix = ["G", "S", "E", "C", null, "J", "R", "I"][satellite.gnssId];
+    return prefix ? `${prefix}${String(satellite.svId).padStart(2, "0")}` : null;
+  }
+
+  function satelliteGnssIdFromPrn(prn) {
+    return ({ G: 0, S: 1, E: 2, C: 3, J: 5, R: 6, I: 7 })[prn?.[0]] ?? null;
+  }
+
+  function selectedSatellitePredictions(predictions, constellations, enabled = true, usedSatellites = null) {
+    if (!enabled) return [];
+    const usedPrns = usedSatellites === null ? null : new Set(usedSatellites.map(satellitePrn).filter(Boolean));
+    return predictions.filter((prediction) => constellations.has(satelliteGnssIdFromPrn(prediction.PRN))
+      && (usedPrns === null || usedPrns.has(prediction.PRN)));
+  }
+
+  function satelliteAzimuthDifference(predicted, receiverAzimuth) {
+    return (predicted - receiverAzimuth + 540) % 360 - 180;
+  }
+
+  function validSatelliteLocation(latitude, longitude) {
+    return Number.isFinite(latitude) && Math.abs(latitude) <= 90
+      && Number.isFinite(longitude) && Math.abs(longitude) <= 180;
+  }
+
+  function restoreSatelliteManualFeeds() {
+    if (satelliteManualFeeds.loaded) return;
+    satelliteManualFeeds.loaded = true;
+    for (const [kind, key] of [["tle", SATELLITE_TLE_UPLOAD_CACHE_KEY], ["metadata", SATELLITE_METADATA_UPLOAD_CACHE_KEY]]) {
+      try {
+        const saved = localStorage.getItem(key);
+        if (!saved) continue;
+        const entry = JSON.parse(saved);
+        if (typeof entry.text !== "string" || !entry.text.trim() || !Number.isFinite(entry.savedAt)) {
+          throw new Error(`Saved ${kind} file cache has an invalid format.`);
+        }
+        satelliteManualFeeds[`${kind}Text`] = entry.text;
+        satelliteManualFeeds[`${kind}Name`] = typeof entry.name === "string" ? entry.name : `Imported ${kind.toUpperCase()}`;
+        satelliteManualFeeds[`${kind}SavedAt`] = entry.savedAt;
+      } catch (error) {
+        satelliteManualFeeds.storageErrors[kind] = error instanceof Error ? error.message : String(error);
+      }
+    }
+  }
+
+  function saveSatelliteManualFeed(kind, text, name) {
+    restoreSatelliteManualFeeds();
+    const savedAt = Date.now();
+    satelliteManualFeeds[`${kind}Text`] = text;
+    satelliteManualFeeds[`${kind}Name`] = name;
+    satelliteManualFeeds[`${kind}SavedAt`] = savedAt;
+    const key = kind === "tle" ? SATELLITE_TLE_UPLOAD_CACHE_KEY : SATELLITE_METADATA_UPLOAD_CACHE_KEY;
+    try {
+      localStorage.setItem(key, JSON.stringify({ text, name, savedAt }));
+      satelliteManualFeeds.storageErrors[kind] = null;
+      return true;
+    } catch (error) {
+      satelliteManualFeeds.storageErrors[kind] = error instanceof Error ? error.message : String(error);
+      return false;
+    }
+  }
+
+  function parseUploadedPrnMap(text) {
+    if (typeof text !== "string") throw new Error("The selected mapping file is not valid text.");
+    const match = /\bconst\s+PRNMAP\s*=\s*(\{[^]*?\})\s*;/.exec(text);
+    if (!match) throw new Error("The selected file does not contain a GNSS-Radar PRNMAP.");
+    let entries;
+    try {
+      entries = JSON.parse(match[1]);
+    } catch (error) {
+      throw new Error(`Could not parse the PRNMAP object: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!entries || typeof entries !== "object" || Array.isArray(entries)) throw new Error("The PRNMAP must be an object keyed by NORAD catalog number.");
+    const prnByNorad = new Map();
+    for (const [catalogNumber, label] of Object.entries(entries)) {
+      const norad = Number(catalogNumber);
+      const prnMatch = typeof label === "string" && /^([GRECQJIS])(\d{1,3})$/.exec(label);
+      if (!/^\d+$/.test(catalogNumber) || !Number.isSafeInteger(norad) || norad <= 0 || !prnMatch) {
+        throw new Error(`Invalid PRN mapping for NORAD ${catalogNumber}.`);
+      }
+      const isQzss = prnMatch[1] === "Q";
+      const prefix = isQzss ? "J" : prnMatch[1];
+      const number = Number(prnMatch[2]) - (isQzss ? 192 : 0);
+      if (number <= 0) throw new Error(`Invalid PRN label "${label}".`);
+      prnByNorad.set(norad, `${prefix}${String(number).padStart(2, "0")}`);
+    }
+    if (!prnByNorad.size) throw new Error("The PRNMAP is empty.");
+    return prnByNorad;
+  }
+
+  function parseUploadedSatelliteTle(text, metadataText = null) {
+    if (typeof text !== "string" || !text.trim()) throw new Error("The selected TLE file is empty.");
+    const satellite = window.satellite;
+    if (!satellite?.twoline2satrec) throw new Error("satellite.js is unavailable; reload the page before importing TLE data.");
+    const metadata = metadataText ? parseUploadedPrnMap(metadataText) : new Map();
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const records = [];
+    for (let index = 0; index < lines.length - 1; index++) {
+      const line1 = lines[index];
+      const line2 = lines[index + 1];
+      if (!/^1 \d{5}/.test(line1) || !/^2 \d{5}/.test(line2)) continue;
+      const norad = Number(line1.slice(2, 7));
+      if (!Number.isInteger(norad) || line2.slice(2, 7).trim() !== String(norad)) continue;
+      const name = index > 0 ? lines[index - 1].replace(/^0\s+/, "") : "";
+      const directMatch = /\(([GRECJIS])\s*0*(\d{1,3})\)/i.exec(name);
+      const gpsMatch = /^GPS\b.*\bPRN\s*0*(\d{1,2})\b/i.exec(name);
+      const qzssMatch = /\bQZSS\/PRN\s*(19[3-9]|20[0-2])\b/i.exec(name);
+      const namedPrn = directMatch ? `${directMatch[1].toUpperCase()}${directMatch[2].padStart(2, "0")}`
+        : gpsMatch ? `G${gpsMatch[1].padStart(2, "0")}`
+          : qzssMatch ? `J${String(Number(qzssMatch[1]) - 192).padStart(2, "0")}` : null;
+      const prn = metadata.get(norad) || namedPrn;
+      if (!prn || !/^[GRECJIS]\d{2,3}$/.test(prn)) { index += 1; continue; }
+      try {
+        records.push({ PRN: prn, NORAD_ID: norad, satrec: satellite.twoline2satrec(line1, line2) });
+      } catch (error) {
+        throw new Error(`Invalid TLE for NORAD ${norad}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      index += 1;
+    }
+    if (!records.length) throw new Error("No TLE satellites with resolvable GNSS PRNs were found. Import the GNSS-Radar PRN mapping file if TLE names do not contain PRNs.");
+    return records;
+  }
+
+  function calculateUploadedSatellitePredictions(records, latitude, longitude, time = new Date()) {
+    const satellite = window.satellite;
+    if (!satellite?.propagate || !satellite?.eciToEcf || !satellite?.ecfToLookAngles || !satellite?.degreesToRadians
+      || !satellite?.radiansToDegrees || !satellite?.gstime) {
+      throw new Error("satellite.js is unavailable; reload the page before calculating imported TLE data.");
+    }
+    const observer = {
+      latitude: satellite.degreesToRadians(latitude),
+      longitude: satellite.degreesToRadians(longitude),
+      height: 0,
+    };
+    const gmst = satellite.gstime(time);
+    return records.flatMap((record) => {
+      const positionAndVelocity = satellite.propagate(record.satrec, time);
+      if (!positionAndVelocity.position) return [];
+      const look = satellite.ecfToLookAngles(observer, satellite.eciToEcf(positionAndVelocity.position, gmst));
+      const elevation = satellite.radiansToDegrees(look.elevation);
+      if (!Number.isFinite(elevation) || !Number.isFinite(look.azimuth)) return [];
+      return [{ PRN: record.PRN, NORAD_ID: record.NORAD_ID, AZIMUTH: (satellite.radiansToDegrees(look.azimuth) + 360) % 360, ELEVATION: elevation }];
+    }).sort((left, right) => right.ELEVATION - left.ELEVATION);
+  }
+
+  async function importSatelliteFeedFiles(files) {
+    restoreSatelliteManualFeeds();
+    const imported = await Promise.all(Array.from(files, async (file) => ({ file, text: await file.text() })));
+    const metadataFiles = imported.filter(({ file, text }) => /prnmap|metadata/i.test(file.name) || /\bconst\s+PRNMAP\b/.test(text));
+    const tleFiles = imported.filter(({ file, text }) => !metadataFiles.some((metadataFile) => metadataFile.file === file));
+    for (const { file, text } of metadataFiles) {
+      if (!text.trim()) throw new Error(`${file.name} is empty.`);
+      parseUploadedPrnMap(text);
+      saveSatelliteManualFeed("metadata", text, file.name);
+    }
+    for (const { file, text } of tleFiles) {
+      if (!text.trim()) throw new Error(`${file.name} is empty.`);
+      parseUploadedSatelliteTle(text, satelliteManualFeeds.metadataText);
+      saveSatelliteManualFeed("tle", text, file.name);
+    }
+    if (!satelliteManualFeeds.tleText) {
+      return {
+        ready: false,
+        metadataName: satelliteManualFeeds.metadataName,
+        persistent: !Object.values(satelliteManualFeeds.storageErrors).some(Boolean),
+        storageError: Object.values(satelliteManualFeeds.storageErrors).filter(Boolean).join("; "),
+      };
+    }
+    parseUploadedSatelliteTle(satelliteManualFeeds.tleText, satelliteManualFeeds.metadataText);
+    return {
+      ready: true,
+      tleName: satelliteManualFeeds.tleName,
+      metadataName: satelliteManualFeeds.metadataName,
+      persistent: !Object.values(satelliteManualFeeds.storageErrors).some(Boolean),
+      storageError: Object.values(satelliteManualFeeds.storageErrors).filter(Boolean).join("; "),
+    };
+  }
+
+  function satelliteLocationDistanceMetres(first, second) {
+    return Math.hypot(
+      (second.latitude - first.latitude) * 111320,
+      (second.longitude - first.longitude) * 111320 * Math.cos(second.latitude * Math.PI / 180),
+    );
+  }
+
+  function matchingSatellitePredictions(source, location) {
+    const resultLocation = satelliteOrbitState.resultLocation;
+    if (satelliteOrbitState.source !== source || !resultLocation || !location || location.error || resultLocation.mode !== location.mode) return [];
+    const sameLocation = resultLocation.latitude === location.latitude && resultLocation.longitude === location.longitude;
+    const closeLiveLocation = location.mode === "receiver-live" && satelliteLocationDistanceMetres(resultLocation, location) < 1000;
+    return sameLocation || closeLiveLocation ? satelliteOrbitState.positions : [];
+  }
+
+  function satelliteObserverLocation(source, now = Date.now()) {
+    if (settings.satelliteLocationLocked) {
+      if (settings.satelliteLocationMode === "manual") {
+        const latitude = satelliteLocationLatitude.value.trim() ? Number(satelliteLocationLatitude.value) : NaN;
+        const longitude = satelliteLocationLongitude.value.trim() ? Number(satelliteLocationLongitude.value) : NaN;
+        return validSatelliteLocation(latitude, longitude)
+          ? { latitude, longitude, mode: "manual" }
+          : { error: "Enter a valid latitude (-90 to 90) and longitude (-180 to 180)." };
+      }
+      if (validSatelliteLocation(settings.satelliteLockedLatitude, settings.satelliteLockedLongitude)) {
+        return { latitude: settings.satelliteLockedLatitude, longitude: settings.satelliteLockedLongitude, mode: "receiver-locked" };
+      }
+      return { error: `No ${source}-PVT location is saved. Wait for a valid receiver fix, then enable the lock.` };
+    }
+    const position = positionComparisonState.latest[source];
+    if (!position?.positionValid || now - position.receivedAt > 5000) return { error: `Waiting for a fresh valid ${source}-PVT position.` };
+    return { latitude: position.latitude, longitude: position.longitude, mode: "receiver-live" };
+  }
+
+  function syncSatelliteLocationControls() {
+    satelliteLocationLocked.checked = settings.satelliteLocationLocked;
+    satelliteLocationMode.value = settings.satelliteLocationMode;
+    satelliteManualLocation.hidden = satelliteLocationMode.value !== "manual";
+    satelliteLocationLatitude.value = settings.satelliteLockedLatitude ?? "";
+    satelliteLocationLongitude.value = settings.satelliteLockedLongitude ?? "";
+  }
+
+  function captureSatelliteReceiverLocation() {
+    const position = positionComparisonState.latest[satelliteSource.value];
+    if (!position?.positionValid || Date.now() - position.receivedAt > 5000) return false;
+    settings.satelliteLockedLatitude = position.latitude;
+    settings.satelliteLockedLongitude = position.longitude;
+    return true;
+  }
+
+  function updateSatelliteLocationControls() {
+    settings.satelliteLocationMode = satelliteLocationMode.value === "manual" ? "manual" : "receiver";
+    if (settings.satelliteLocationMode === "receiver" && satelliteLocationLocked.checked) {
+      if (!captureSatelliteReceiverLocation()) {
+        satellitePredictionStatus.textContent = `Waiting for a fresh valid ${satelliteSource.value}-PVT position to lock.`;
+        settings.satelliteLocationLocked = false;
+        satelliteLocationLocked.checked = false;
+      } else {
+        satelliteLocationLatitude.value = String(settings.satelliteLockedLatitude);
+        satelliteLocationLongitude.value = String(settings.satelliteLockedLongitude);
+      }
+    } else {
+      const latitude = satelliteLocationLatitude.value.trim() ? Number(satelliteLocationLatitude.value) : NaN;
+      const longitude = satelliteLocationLongitude.value.trim() ? Number(satelliteLocationLongitude.value) : NaN;
+      settings.satelliteLockedLatitude = validSatelliteLocation(latitude, longitude) ? latitude : null;
+      settings.satelliteLockedLongitude = validSatelliteLocation(latitude, longitude) ? longitude : null;
+      if (satelliteLocationMode.value === "manual" && satelliteLocationLocked.checked
+        && !validSatelliteLocation(settings.satelliteLockedLatitude, settings.satelliteLockedLongitude)) {
+        satellitePredictionStatus.textContent = "Enter a valid latitude (-90 to 90) and longitude (-180 to 180) before locking.";
+        settings.satelliteLocationLocked = false;
+        satelliteLocationLocked.checked = false;
+      }
+    }
+    saveSettings();
+    renderSatellites();
+  }
+
+  function renderSatellitePredictionComparison(satellites, report, predictions, source, location, now) {
+    if (!satellitePredictionsEnabled) {
+      satellitePredictionStatus.textContent = "TLE predictions are disabled because satellite.js could not be loaded. Place satellite.min.js next to index.html and reload to enable them.";
+      satelliteComparisonRows.innerHTML = '<tr><td colspan="4">TLE predictions are unavailable; live satellite data is still active.</td></tr>';
+      return;
+    }
+    const api = window.GNSSSatelliteAPI;
+    restoreSatelliteManualFeeds();
+    if (!location || location.error) {
+      satellitePredictionStatus.textContent = location?.error || `Waiting for a ${source} location.`;
+      satelliteComparisonRows.innerHTML = `<tr><td colspan="4">${location?.error || "A location is required for orbit predictions."}</td></tr>`;
+      return;
+    }
+    if (!api?.calculate && !satelliteManualFeeds.tleText) {
+      satellitePredictionStatus.textContent = "GNSS Sky Map API unavailable; check the network and reload.";
+      satelliteComparisonRows.innerHTML = '<tr><td colspan="4">Online orbit predictions are unavailable.</td></tr>';
+      return;
+    }
+    if (satelliteOrbitState.loading && satelliteOrbitState.source === source) {
+      satellitePredictionStatus.textContent = satelliteOrbitState.manual ? "Calculating predictions from imported TLE data..." : "Loading online TLE positions...";
+    } else if (satelliteOrbitState.error && satelliteOrbitState.source === source) {
+      satellitePredictionStatus.textContent = `Online prediction failed: ${satelliteOrbitState.error}. Import a TLE and optional PRN mapping file to use local feeds.`;
+    } else if (satelliteOrbitState.updatedAt && satelliteOrbitState.source === source) {
+      const feedStatus = api?.getStatus?.();
+      const feedNotes = [];
+      if (satelliteOrbitState.manual) {
+        feedNotes.push(`using imported ${satelliteManualFeeds.tleName || "TLE"}${satelliteManualFeeds.metadataName ? ` and ${satelliteManualFeeds.metadataName}` : ""}`);
+        if (satelliteManualFeeds.tleSavedAt && now - satelliteManualFeeds.tleSavedAt > 6 * 60 * 60 * 1000) feedNotes.push("imported TLE is over six hours old");
+        if (Object.values(satelliteManualFeeds.storageErrors).some(Boolean)) feedNotes.push("imported files could not be cached persistently");
+      } else {
+        if (feedStatus?.cache?.tle?.status === "stale") feedNotes.push("using stale cached TLE data");
+        if (feedStatus?.errors?.metadata) {
+          feedNotes.push(satelliteManualFeeds.metadataText && !satelliteManualFeeds.tleText
+            ? "online PRN mapping unavailable; imported mapping is saved, but import a TLE file to use it"
+            : "PRN mapping unavailable; using PRNs identified in TLE names");
+        }
+      }
+      const locationSource = location.mode === "manual" ? "manual location" : location.mode === "receiver-locked" ? "locked receiver location" : "live receiver location";
+      satellitePredictionStatus.textContent = `TLE prediction updated ${new Date(satelliteOrbitState.updatedAt).toLocaleTimeString()} using computer UTC and ${locationSource}${feedNotes.length ? `; ${feedNotes.join("; ")}` : ""}.`;
+      satellitePredictionStatus.title = [feedStatus?.errors?.tle?.message, feedStatus?.errors?.metadata?.message].filter(Boolean).join("; ");
+    } else {
+      satellitePredictionStatus.textContent = satelliteManualFeeds.tleText
+        ? "Imported TLE available; waiting for a valid receiver position."
+        : "Waiting for online orbit predictions.";
+    }
+    if (!report || !satellites.length) {
+      satelliteComparisonRows.innerHTML = `<tr><td colspan="4">${report ? "No satellites match the current filters." : "Waiting for receiver satellite data."}</td></tr>`;
+      return;
+    }
+    const byPrn = new Map(predictions.map((prediction) => [prediction.PRN, prediction]));
+    satelliteComparisonRows.innerHTML = satellites.map((satellite) => {
+      const prediction = byPrn.get(satellitePrn(satellite));
+      const satelliteName = `${satelliteGnssName(satellite.gnssId)} ${satellite.svId}`;
+      const receiverPosition = satellite.azimuth === null || satellite.elevation === null ? "--" : `${satellite.azimuth}\u00b0 / ${satellite.elevation}\u00b0`;
+      const orbitPosition = prediction ? `${prediction.AZIMUTH.toFixed(1)}\u00b0 / ${prediction.ELEVATION.toFixed(1)}\u00b0` : "No TLE match";
+      const difference = prediction && satellite.azimuth !== null && satellite.elevation !== null
+        ? `${satelliteAzimuthDifference(prediction.AZIMUTH, satellite.azimuth).toFixed(1)}\u00b0 / ${(prediction.ELEVATION - satellite.elevation).toFixed(1)}\u00b0`
+        : "--";
+      return `<tr><th scope="row" style="color:${gnssColor(satellite.gnssId)}">${satelliteName}</th><td>${receiverPosition}</td><td>${orbitPosition}</td><td>${difference}</td></tr>`;
+    }).join("");
+  }
+
+  async function requestSatelliteOrbitPredictions(source, now = Date.now(), force = false) {
+    if (!satellitePredictionsEnabled) return;
+    const api = window.GNSSSatelliteAPI;
+    restoreSatelliteManualFeeds();
+    const usingManual = Boolean(satelliteManualFeeds.tleText);
+    const location = satelliteObserverLocation(source, now);
+    if ((!api?.calculate && !usingManual) || !location || location.error) return;
+    if (satelliteOrbitState.loading && satelliteOrbitState.source === source && !force) return;
+    const movedMetres = satelliteOrbitState.location
+      ? satelliteLocationDistanceMetres(satelliteOrbitState.location, location)
+      : Infinity;
+    const locationChanged = satelliteOrbitState.source !== source || satelliteOrbitState.location?.mode !== location.mode
+      || (location.mode === "receiver-live" ? movedMetres >= 1000 : movedMetres >= 1);
+    const due = force || satelliteOrbitState.source !== source || !satelliteOrbitState.updatedAt
+      || satelliteOrbitState.location?.mode !== location.mode || now - satelliteOrbitState.updatedAt >= 60000
+      || (location.mode === "receiver-live" && movedMetres >= 1000)
+      || (location.mode !== "receiver-live" && movedMetres >= 1);
+    if (!due || (!force && !locationChanged && satelliteOrbitState.attemptedAt && now - satelliteOrbitState.attemptedAt < 60000)) return;
+    const requestId = ++satelliteOrbitState.requestId;
+    satelliteOrbitState.source = source;
+    satelliteOrbitState.location = location;
+    satelliteOrbitState.attemptedAt = now;
+    satelliteOrbitState.loading = true;
+    satelliteOrbitState.error = null;
+    satelliteOrbitState.manual = usingManual;
+    satellitePredictionRefresh.textContent = usingManual ? "Recalculate predictions" : "Refresh online data";
+    satellitePredictionStatus.textContent = usingManual ? "Calculating predictions from imported TLE data..." : "Loading online TLE positions...";
+    try {
+      const predictionTime = new Date();
+      const positions = usingManual
+        ? calculateUploadedSatellitePredictions(
+          parseUploadedSatelliteTle(satelliteManualFeeds.tleText, satelliteManualFeeds.metadataText),
+          location.latitude,
+          location.longitude,
+          predictionTime,
+        )
+        : await api.calculate({ LAT: location.latitude, LON: location.longitude, "UTC-TIME": predictionTime });
+      if (requestId !== satelliteOrbitState.requestId) return;
+      if (!Array.isArray(positions)) throw new Error("GNSS Sky Map API returned an invalid response.");
+      satelliteOrbitState.positions = positions.filter((prediction) =>
+        /^[A-Z]\d{2,3}$/.test(prediction.PRN)
+        && Number.isFinite(prediction.AZIMUTH)
+        && Number.isFinite(prediction.ELEVATION),
+      );
+      satelliteOrbitState.updatedAt = Date.now();
+      satelliteOrbitState.resultLocation = location;
+    } catch (error) {
+      if (requestId === satelliteOrbitState.requestId) satelliteOrbitState.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (requestId === satelliteOrbitState.requestId) {
+        satelliteOrbitState.loading = false;
+        renderSatellites();
+      }
+    }
+  }
+
+  function drawSatelliteSky(satellites, predictions = []) {
     const { width, height } = sizeCanvas(satelliteSky); const context = satelliteSky.getContext("2d");
     const dpr = window.devicePixelRatio || 1; const centerX = width / 2; const centerY = height / 2;
     const radius = Math.max(1, Math.min(width, height) / 2 - 36 * dpr);
@@ -1613,10 +2058,25 @@
       const radians = azimuth * Math.PI / 180;
       labels.push({ x: centerX + Math.sin(radians) * (radius + 20 * dpr) - 8 * dpr, y: centerY - Math.cos(radians) * (radius + 20 * dpr) - 7 * dpr, width: 16 * dpr, height: 14 * dpr });
     }
+    const observedByPrn = new Map(satellites
+      .map((satellite) => [satellitePrn(satellite), satelliteSkyPoint(satellite, centerX, centerY, radius)])
+      .filter(([prn, point]) => prn && point));
+    context.lineWidth = dpr;
+    for (const prediction of predictions) {
+      if (prediction.ELEVATION < 0) continue;
+      const observedPoint = observedByPrn.get(prediction.PRN);
+      const predictedPoint = satelliteSkyPoint({ azimuth: prediction.AZIMUTH, elevation: prediction.ELEVATION }, centerX, centerY, radius);
+      if (!observedPoint || !predictedPoint) continue;
+      context.beginPath();
+      context.moveTo(observedPoint.x, observedPoint.y);
+      context.lineTo(predictedPoint.x, predictedPoint.y);
+      context.strokeStyle = gnssColor(satelliteGnssIdFromPrn(prediction.PRN));
+      context.stroke();
+    }
     for (const satellite of [...satellites].sort((left, right) => Number(right.used) - Number(left.used))) {
       const point = satelliteSkyPoint(satellite, centerX, centerY, radius);
       if (!point) continue;
-      satelliteSkyPoints.push({ ...point, satellite });
+      satelliteSkyPoints.push({ ...point, kind: "receiver", satellite });
       const color = gnssColor(satellite.gnssId);
       context.beginPath();
       if (satellite.correctionsUsed) context.rect(point.x - 5 * dpr, point.y - 5 * dpr, 10 * dpr, 10 * dpr);
@@ -1630,6 +2090,24 @@
         labels.push({ x: position[0], y: position[1], width: labelWidth, height: labelHeight });
         context.fillStyle = color; context.textAlign = "left"; context.textBaseline = "top"; context.fillText(text, position[0], position[1]);
       }
+    }
+    for (const prediction of predictions) {
+      if (prediction.ELEVATION < 0) continue;
+      const point = satelliteSkyPoint({ azimuth: prediction.AZIMUTH, elevation: prediction.ELEVATION }, centerX, centerY, radius);
+      if (!point) continue;
+      satelliteSkyPoints.push({ ...point, kind: "orbit", prediction });
+      context.beginPath();
+      context.moveTo(point.x - 11 * dpr, point.y);
+      context.lineTo(point.x - 2 * dpr, point.y);
+      context.moveTo(point.x + 2 * dpr, point.y);
+      context.lineTo(point.x + 11 * dpr, point.y);
+      context.moveTo(point.x, point.y - 11 * dpr);
+      context.lineTo(point.x, point.y - 2 * dpr);
+      context.moveTo(point.x, point.y + 2 * dpr);
+      context.lineTo(point.x, point.y + 11 * dpr);
+      context.lineWidth = 2 * dpr;
+      context.strokeStyle = gnssColor(satelliteGnssIdFromPrn(prediction.PRN));
+      context.stroke();
     }
   }
 
@@ -2596,9 +3074,12 @@
     }));
   }
 
-  function gnssFeatureConfigurationRequests(receiverName, enableOsnmaValue, enableGalHasValue) {
+  function gnssFeatureConfigurationRequests(receiverName, enableOsnmaValue, enableGalHasValue, strictOsnmaValue) {
     const requests = [["Galileo OSNMA", 0x10350005, enableOsnmaValue ? 1 : 0, 1]];
-    if (receiverName === "x20") requests.push(["Galileo HAS", 0x100d0002, enableGalHasValue ? 1 : 0, 1]);
+    if (receiverName === "x20") requests.push(
+      ["Galileo HAS", 0x100d0002, enableGalHasValue ? 1 : 0, 1],
+      ["Authenticated navigation data only", 0x101100dd, strictOsnmaValue ? 1 : 0, 1],
+    );
     return requests;
   }
 
@@ -2620,7 +3101,7 @@
         ["NAV-SIG UART1", 0x20910043, 1, 1],
         ["NAV-STATUS UART1", 0x2091001b, 1, 1],
         ["Assistance message ACKs", 0x10110025, 1, 1],
-        ...gnssFeatureConfigurationRequests(receiver.value, settings.enableOsnma, settings.enableGalHas),
+        ...gnssFeatureConfigurationRequests(receiver.value, settings.enableOsnma, settings.enableGalHas, settings.strictOsnma),
         [osnmaClockSettings.useComputerClock ? "Require trusted computer time" : "OSNMA without trusted computer time", 0x10350009, osnmaClockSettings.useComputerClock ? 1 : 0, 1],
         ["SEC-OSNMA UART1", 0x209106cb, 1, 1],
         ["RXM-RAWX UART1", 0x209102a5, 1, 1],
@@ -2652,6 +3133,7 @@
         ? "Trusted-time requirement configured; click Send trusted time to send computer UTC."
         : "Trusted UTC requirement is off; click Send trusted time to enable it and send UTC.";
       showConfigResults(results);
+      receiverConfigurationNeedsApply = false;
       startSecSigPolling();
       setStatus(`Configuration completed for ${receiver.value.toUpperCase()}; waiting for NAV and monitoring data`);
       return results;
@@ -2979,17 +3461,84 @@
   });
   satelliteSource.addEventListener("change", () => renderSatellites());
   satelliteUsedOnly.addEventListener("change", () => renderSatellites());
+  satelliteOnlineVisible.addEventListener("change", () => renderSatellites());
+  satelliteLocationLocked.addEventListener("change", () => {
+    if (satelliteLocationLocked.checked && satelliteLocationMode.value === "receiver" && !captureSatelliteReceiverLocation()) {
+      satelliteLocationLocked.checked = false;
+      satellitePredictionStatus.textContent = `Waiting for a fresh valid ${satelliteSource.value}-PVT position to lock.`;
+      return;
+    }
+    if (satelliteLocationLocked.checked && satelliteLocationMode.value === "receiver") {
+      satelliteLocationLatitude.value = String(settings.satelliteLockedLatitude);
+      satelliteLocationLongitude.value = String(settings.satelliteLockedLongitude);
+    }
+    if (satelliteLocationLocked.checked && satelliteLocationMode.value === "manual") {
+      const latitude = satelliteLocationLatitude.value.trim() ? Number(satelliteLocationLatitude.value) : NaN;
+      const longitude = satelliteLocationLongitude.value.trim() ? Number(satelliteLocationLongitude.value) : NaN;
+      if (!validSatelliteLocation(latitude, longitude)) {
+        satelliteLocationLocked.checked = false;
+        satellitePredictionStatus.textContent = "Enter a valid latitude (-90 to 90) and longitude (-180 to 180) before locking.";
+        return;
+      }
+      settings.satelliteLockedLatitude = latitude;
+      settings.satelliteLockedLongitude = longitude;
+    }
+    settings.satelliteLocationLocked = satelliteLocationLocked.checked;
+    settings.satelliteLocationMode = satelliteLocationMode.value;
+    saveSettings();
+    renderSatellites();
+  });
+  satelliteLocationMode.addEventListener("change", () => {
+    settings.satelliteLocationMode = satelliteLocationMode.value;
+    satelliteManualLocation.hidden = satelliteLocationMode.value !== "manual";
+    if (satelliteLocationMode.value === "receiver" && satelliteLocationLocked.checked && !captureSatelliteReceiverLocation()) {
+      satelliteLocationLocked.checked = false;
+      settings.satelliteLocationLocked = false;
+      satellitePredictionStatus.textContent = `Waiting for a fresh valid ${satelliteSource.value}-PVT position to lock.`;
+    } else if (satelliteLocationMode.value === "receiver" && satelliteLocationLocked.checked) {
+      satelliteLocationLatitude.value = String(settings.satelliteLockedLatitude);
+      satelliteLocationLongitude.value = String(settings.satelliteLockedLongitude);
+    }
+    saveSettings();
+    renderSatellites();
+  });
+  satelliteLocationLatitude.addEventListener("change", updateSatelliteLocationControls);
+  satelliteLocationLongitude.addEventListener("change", updateSatelliteLocationControls);
+  syncSatelliteLocationControls();
   satelliteTable.addEventListener("click", (event) => {
     const button = event.target.closest("[data-sort]");
     if (!button) return;
     satelliteSort.direction = satelliteSort.key === button.dataset.sort ? -satelliteSort.direction : ["cno", "elevation", "used"].includes(button.dataset.sort) ? -1 : 1;
     satelliteSort.key = button.dataset.sort; renderSatellites();
   });
+  satellitePredictionRefresh.addEventListener("click", () => requestSatelliteOrbitPredictions(satelliteSource.value, Date.now(), true));
+  satelliteFeedUploadButton.addEventListener("click", () => satelliteFeedUpload.click());
+  satelliteFeedUpload.addEventListener("change", async () => {
+    if (!satelliteFeedUpload.files?.length) return;
+    satellitePredictionStatus.textContent = "Importing satellite feed files...";
+    try {
+      const imported = await importSatelliteFeedFiles(satelliteFeedUpload.files);
+      if (!imported.ready) {
+        satellitePredictionStatus.textContent = `Imported ${imported.metadataName}; import a GNSS TLE file to calculate predictions.${imported.persistent ? "" : ` Browser cache failed: ${imported.storageError}`}`;
+        return;
+      }
+      satellitePredictionStatus.textContent = imported.persistent
+        ? `Imported ${imported.tleName}${imported.metadataName ? ` and ${imported.metadataName}` : ""}; cached in this browser.`
+        : `Imported ${imported.tleName}${imported.metadataName ? ` and ${imported.metadataName}` : ""}, but browser caching failed: ${imported.storageError}`;
+      await requestSatelliteOrbitPredictions(satelliteSource.value, Date.now(), true);
+    } catch (error) {
+      satellitePredictionStatus.textContent = `Satellite feed import failed: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      satelliteFeedUpload.value = "";
+    }
+  });
   satelliteSky.addEventListener("pointermove", (event) => {
     const bounds = satelliteSky.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
     const x = (event.clientX - bounds.left) * dpr; const y = (event.clientY - bounds.top) * dpr;
     const point = satelliteSkyPoints.find((candidate) => Math.hypot(candidate.x - x, candidate.y - y) <= 10 * dpr);
-    satelliteSky.title = point ? `${satelliteGnssName(point.satellite.gnssId)} ${point.satellite.svId}: ${point.satellite.cno} dB-Hz, elevation ${point.satellite.elevation}, azimuth ${point.satellite.azimuth}${point.satellite.used ? ", used in solution" : ""}; corrections: ${satelliteCorrectionText(point.satellite)}` : "Satellite sky view";
+    satelliteSky.title = !point ? "Satellite sky view" : point.kind === "orbit"
+      ? `${point.prediction.PRN}: online TLE prediction, elevation ${point.prediction.ELEVATION.toFixed(1)}\u00b0, azimuth ${point.prediction.AZIMUTH.toFixed(1)}\u00b0`
+      : `${satelliteGnssName(point.satellite.gnssId)} ${point.satellite.svId}: ${point.satellite.cno} dB-Hz, elevation ${point.satellite.elevation}, azimuth ${point.satellite.azimuth}${point.satellite.used ? ", used in solution" : ""}; corrections: ${satelliteCorrectionText(point.satellite)}`;
   });
   new ResizeObserver(() => { if (!satellitesPanel.hidden) renderSatellites(); }).observe(satelliteSky);
   baud.addEventListener("change", () => { if (baud.value !== "auto") { settings.baudByReceiver[receiver.value] = Number(baud.value); saveSettings(); } });
@@ -3064,18 +3613,34 @@
   });
   window.addEventListener("resize", positionSystemStats);
   settingsClose.addEventListener("click", () => settingsDialog.close());
-  settingsReset.addEventListener("click", () => { const sourceChanged = settings.positionSource !== DEFAULT_SETTINGS.positionSource; Object.assign(settings, DEFAULT_SETTINGS); applyCompactMode(); syncSettingsForm(); renderOsnma(); renderHasDiagnostics(); if (sourceChanged) resetPositionSourceDisplay(); });
+  settingsReset.addEventListener("click", () => { const sourceChanged = settings.positionSource !== DEFAULT_SETTINGS.positionSource; const receiverFeaturesChanged = settings.configureAllInterfaces !== DEFAULT_SETTINGS.configureAllInterfaces || settings.enableOsnma !== DEFAULT_SETTINGS.enableOsnma || settings.enableGalHas !== DEFAULT_SETTINGS.enableGalHas || settings.strictOsnma !== DEFAULT_SETTINGS.strictOsnma; if (writer && receiverFeaturesChanged) receiverConfigurationNeedsApply = true; Object.assign(settings, DEFAULT_SETTINGS); applyCompactMode(); syncSettingsForm(); syncSatelliteLocationControls(); renderSatellitePredictionComparison([], null, [], satelliteSource.value, satelliteObserverLocation(satelliteSource.value), Date.now()); renderOsnma(); renderHasDiagnostics(); if (sourceChanged) resetPositionSourceDisplay(); });
   enableOsnma.addEventListener("change", updateGnssIntegritySettingsForm);
   enableGalHas.addEventListener("change", updateGnssIntegritySettingsForm);
   settingsForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const nextBaud = Number(receiverBaud.value);
     const interfacesChanged = settings.configureAllInterfaces !== configureAllInterfaces.checked;
-    const gnssFeaturesChanged = settings.enableOsnma !== enableOsnma.checked || settings.enableGalHas !== enableGalHas.checked;
+    const nextStrictOsnma = receiver.value === "x20" ? strictOsnma.checked : settings.strictOsnma;
+    const gnssFeaturesChanged = receiverConfigurationNeedsApply || settings.enableOsnma !== enableOsnma.checked || settings.enableGalHas !== enableGalHas.checked || settings.strictOsnma !== nextStrictOsnma;
     const nextPositionSource = receiver.value === "x20" ? positionSourceSelect.value : settings.positionSource;
     const positionSourceChanged = nextPositionSource !== settings.positionSource;
     const currentBaud = settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value];
-    const nextSettings = { compactMode: compactMode.checked, enableOsnma: enableOsnma.checked, enableGalHas: enableGalHas.checked, positionSource: nextPositionSource, showAverage: showAverage.checked, averageFrames: Math.max(1, Math.min(120, Number(averageFrames.value) || DEFAULT_SETTINGS.averageFrames)), showPeak: showPeak.checked, peakDecay: Math.max(0, Math.min(30, Number(peakDecay.value) || 0)), darkMap: darkMap.checked, waterfallMinutes: Math.max(5, Math.min(30, Number(waterfallMinutes.value) || DEFAULT_SETTINGS.waterfallMinutes)), waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(waterfallMarkerMinutes.value) || DEFAULT_SETTINGS.waterfallMarkerMinutes)), baudByReceiver: { ...settings.baudByReceiver } };
+    const nextSettings = {
+      ...settings,
+      compactMode: compactMode.checked,
+      enableOsnma: enableOsnma.checked,
+      enableGalHas: enableGalHas.checked,
+      strictOsnma: nextStrictOsnma,
+      positionSource: nextPositionSource,
+      showAverage: showAverage.checked,
+      averageFrames: Math.max(1, Math.min(120, Number(averageFrames.value) || DEFAULT_SETTINGS.averageFrames)),
+      showPeak: showPeak.checked,
+      peakDecay: Math.max(0, Math.min(30, Number(peakDecay.value) || 0)),
+      darkMap: darkMap.checked,
+      waterfallMinutes: Math.max(5, Math.min(30, Number(waterfallMinutes.value) || DEFAULT_SETTINGS.waterfallMinutes)),
+      waterfallMarkerMinutes: Math.max(1, Math.min(10, Number(waterfallMarkerMinutes.value) || DEFAULT_SETTINGS.waterfallMarkerMinutes)),
+      baudByReceiver: { ...settings.baudByReceiver },
+    };
     const markerIntervalChanged = nextSettings.waterfallMarkerMinutes !== settings.waterfallMarkerMinutes; const durationChanged = nextSettings.waterfallMinutes !== settings.waterfallMinutes; const blockCount = blockViews.length;
     nextSettings.configureAllInterfaces = configureAllInterfaces.checked;
     nextSettings.lastReceiver = receiver.value;

@@ -29,6 +29,10 @@ Requires an F9 or X20-series Ublox receiver.
 	enabled by older versions. Input protocols on those buses are not changed.
 	Unsupported interfaces/messages may be rejected individually; inspect the
 	configuration indicator for ACK/NAK results. Configuration is RAM-only.
+- In Settings, enable `Use authenticated navigation data only (strict mode)` to
+	configure `CFG-NAVSPG-ONLY_AUTHDATA` on supported X20 receivers. The saved
+	preference is applied on connection, on `Send config`, or when changed while
+	connected. F9P does not receive this setting.
 
 - The status bar identifies the receiver-side interface using UBX-MON-COMMS
   RX byte-counter changes between samples, not historical RX/TX totals. Startup
@@ -119,6 +123,43 @@ Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 	Unknown positions and below-horizon satellites remain in the table but are not
 	plotted. Live reports become stale after five seconds; replay is labelled recorded.
 	Connection, receiver and replay resets clear snapshots. NAV/NAV2 are never merged.
+- The sky plot can overlay online orbit estimates from the
+	[GNSS Sky Map API](https://github.com/christian-skjetne/PRN-to-skymap) and lists
+	matched receiver/TLE azimuth and elevation, including signed angular differences.
+	The browser script is pinned to a specific upstream commit to avoid stale CDN
+	`@main` responses; update that commit deliberately when adopting upstream changes.
+	The page tries CDN copies of Leaflet, MapLibre GL, `satellite.js`, and the GNSS
+	API, then falls back to local copies in the same folder as `index.html`.
+	Run `python download_offline_libs.py` once while online to download those
+	libraries and stylesheets. If neither copy of `satellite.js` loads, only TLE
+	predictions and their controls are disabled; the rest of the app starts normally.
+	Map tiles, online TLE feeds, and Google-hosted icon fonts still require a network
+	connection.
+	The calculation uses the selected solution's latest valid position and the
+	computer's current UTC, never receiver-reported UTC (which may be untrusted);
+	it refreshes on first use, every minute, after moving about 1 km, or on demand.
+	Live PVT updates immediately update the observer location; the last TLE positions
+	remain visible while the receiver moves less than the refresh threshold.
+	Predictions use the same constellation colors as live satellites, with PRN-matched
+	live and predicted positions connected by a line. Constellation filters apply to
+	both live and predicted markers. `Show online sky-map satellites` hides or shows
+	prediction markers and connector lines without disabling the comparison table.
+	If online feed requests are blocked by CORS, import the
+	[GNSS TLE file](https://raw.githubusercontent.com/satvisorcom/satvisor-data/master/celestrak/tle/gnss.tle)
+	and optionally the
+	[GNSS-Radar PRN mapping file](https://raw.githubusercontent.com/taroz/GNSS-Radar/master/js/prnmap.js)
+	using `Import TLE / PRN mapping`. Import both when TLE names do not identify their
+	PRNs; the mapping file is a JavaScript `PRNMAP` object, not an IGS SINEX file.
+	Imported files are cached by the browser and used for subsequent predictions; a
+	newer TLE or mapping file can be imported at any time. If browser storage is
+	unavailable or full, the import still works for the current page session and the
+	status reports that it was not cached.
+	Enable `Lock sky-map location` to keep a fixed observer location. Choose to freeze
+	the latest valid receiver position or enter independent coordinates; receiver
+	coordinates are not independently verified. The lock and coordinates are saved.
+	TLE positions are approximate predictions, not receiver observations or precision
+	ephemerides. A network connection is needed to load feeds initially; the API
+	caches TLEs and metadata locally and reports when it falls back to stale data.
 
 ### NAV/NAV2 position comparison:
 - On X20, the Position tab compares NAV-PVT and NAV2-PVT at identical `iTOW`
@@ -140,5 +181,3 @@ Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 	No spoofing threshold is inferred: differing correction/filter/authentication
 	policies can cause separation, while shared signal attacks may move both solutions
 	together. Position agreement does not prove signal authenticity.
-
-
