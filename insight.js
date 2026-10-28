@@ -103,6 +103,9 @@
   const satelliteLocationLongitude = document.querySelector("#satellite-location-longitude");
   const satelliteFilters = document.querySelector("#satellite-constellations");
   const satelliteTable = document.querySelector("#satellite-table");
+  const satelliteCorrectionPopup = document.querySelector("#satellite-correction-popup");
+  let satelliteCorrectionPopupKey = null;
+  let satelliteSelectedKey = null;
   const satellitePredictionsEnabled = window.GNSSSatellitePredictionsEnabled !== false;
   if (!satellitePredictionsEnabled) {
     satelliteOnlineVisible.disabled = true;
@@ -1517,7 +1520,22 @@
       const date = new Date(clockMs);
       const options = { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hourCycle: "h23" };
       if (!osnmaClockSettings.showLocalTime) options.timeZone = "UTC";
-      osnmaClockValue.textContent = `${new Intl.DateTimeFormat(undefined, options).format(date)} ${osnmaClockSettings.showLocalTime ? "local" : "UTC"}`;
+      const parts = new Intl.DateTimeFormat(undefined, options).formatToParts(date);
+      const firstTimePart = parts.findIndex(({ type }) => type === "hour");
+      let lastTimePart = -1;
+      for (let index = parts.length - 1; index >= 0; index--) {
+        if (parts[index].type === "second") {
+          lastTimePart = index;
+          break;
+        }
+      }
+      const formatted = parts.map(({ type, value }, index) => {
+        const escaped = value.replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[character]);
+        const startsTime = index === firstTimePart;
+        const endsTime = index === lastTimePart;
+        return `${startsTime ? '<span class="osnma-clock-time">' : ""}${escaped}${endsTime ? "</span>" : ""}`;
+      }).join("");
+      osnmaClockValue.innerHTML = `${formatted} ${osnmaClockSettings.showLocalTime ? "local" : "UTC"}`;
     }
     osnmaClockAge.textContent = age === null ? "Waiting for receiver time" : fresh ? `${source.source}; updated ${age} ms ago` : `${source.source}; stale (${(age / 1000).toFixed(1)} s old)`;
     osnmaClockAge.dataset.state = age === null ? "waiting" : fresh ? "good" : "bad";
@@ -1606,6 +1624,16 @@
     return `${used}${satellite.diffCorr ? "; differential corrections available" : ""}`;
   }
 
+  function toggleSatelliteSelection(key) {
+    satelliteSelectedKey = satelliteSelectedKey === key ? null : key;
+  }
+
+  function satellitePointerClickMatches(pointer, event, hitKey) {
+    return Boolean(pointer && event.isPrimary && event.pointerId === pointer.pointerId
+      && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) <= 6
+      && hitKey === pointer.key);
+  }
+
   function resetSatelliteReports() {
     satelliteReports.NAV = null; satelliteReports.NAV2 = null;
     satelliteAuthReports.NAV = null; satelliteAuthReports.NAV2 = null;
@@ -1648,8 +1676,14 @@
     const emptyMessage = !report ? "Waiting for satellite data." : !report.satellites.length ? "No satellites reported." : satelliteUsedOnly.checked ? "No used satellites match the constellation filters." : "No satellites match the constellation filters.";
     satelliteRows.innerHTML = satellites.length ? satellites.map((satellite) => {
       const authentication = satelliteAuthentication(satellite, report, satelliteAuthReports[source]);
-      return `<tr><th scope="row" style="color:${gnssColor(satellite.gnssId)}">${satelliteGnssName(satellite.gnssId)} ${satellite.svId}</th><td>${satellite.cno}</td><td>${satellite.elevation === null ? "--" : `${satellite.elevation}\u00b0`}</td><td>${satellite.azimuth === null ? "--" : `${satellite.azimuth}\u00b0`}</td><td>${satellite.used ? "Used" : satellite.quality >= 4 ? "Tracked" : satellite.quality >= 2 ? "Acquired" : satellite.quality === 1 ? "Searching" : "No signal"}</td><td>${health[satellite.health]}</td><td>${satelliteCorrectionText(satellite)}</td><td title="${authentication.detail}">${authentication.label}</td></tr>`;
+      const selected = satelliteSelectedKey === `${satellite.gnssId}:${satellite.svId}`;
+      const signalStrength = Number.isFinite(satellite.cno) ? Math.min(100, Math.max(0, satellite.cno / 60 * 100)) : 0;
+      return `<tr class="satellite-table-row" data-satellite-key="${satellite.gnssId}:${satellite.svId}" tabindex="0" aria-selected="${selected}" title="Select to highlight in the sky view"><th scope="row"><span class="satellite-name" style="--signal-strength:${signalStrength}%;--satellite-color:${gnssColor(satellite.gnssId)}">${satelliteGnssName(satellite.gnssId)} ${satellite.svId}</span></th><td>${satellite.cno}</td><td>${satellite.elevation === null ? "--" : `${satellite.elevation}\u00b0`}</td><td>${satellite.azimuth === null ? "--" : `${satellite.azimuth}\u00b0`}</td><td>${satellite.used ? "Used" : satellite.quality >= 4 ? "Tracked" : satellite.quality >= 2 ? "Acquired" : satellite.quality === 1 ? "Searching" : "No signal"}</td><td>${health[satellite.health]}</td><td>${satellite.correctionsUsed ? `<button class="satellite-correction-toggle" type="button" data-satellite-key="${satellite.gnssId}:${satellite.svId}" aria-expanded="${satelliteCorrectionPopupKey === `${satellite.gnssId}:${satellite.svId}` && !satelliteCorrectionPopup.hidden}" aria-label="Show correction details for ${satelliteGnssName(satellite.gnssId)} ${satellite.svId}">YES</button>` : satelliteCorrectionText(satellite)}</td><td title="${authentication.detail}">${authentication.label}</td></tr>`;
     }).join("") : `<tr><td colspan="8">${emptyMessage}</td></tr>`;
+    if (!satelliteCorrectionPopup.hidden && satelliteCorrectionPopupKey) {
+      const correctionSatellite = report?.satellites.find((satellite) => `${satellite.gnssId}:${satellite.svId}` === satelliteCorrectionPopupKey);
+      if (correctionSatellite) satelliteCorrectionPopup.textContent = satelliteCorrectionText(correctionSatellite);
+    }
     for (const button of satelliteTable.querySelectorAll("[data-sort]")) {
       const active = button.dataset.sort === satelliteSort.key;
       button.closest("th").setAttribute("aria-sort", active ? satelliteSort.direction === 1 ? "ascending" : "descending" : "none");
@@ -2073,15 +2107,41 @@
       context.strokeStyle = gnssColor(satelliteGnssIdFromPrn(prediction.PRN));
       context.stroke();
     }
+    for (const prediction of predictions) {
+      if (prediction.ELEVATION < 0) continue;
+      const point = satelliteSkyPoint({ azimuth: prediction.AZIMUTH, elevation: prediction.ELEVATION }, centerX, centerY, radius);
+      if (!point) continue;
+      satelliteSkyPoints.push({ ...point, kind: "orbit", prediction });
+      context.beginPath();
+      context.moveTo(point.x - 14 * dpr, point.y);
+      context.lineTo(point.x - 7 * dpr, point.y);
+      context.moveTo(point.x + 7 * dpr, point.y);
+      context.lineTo(point.x + 14 * dpr, point.y);
+      context.moveTo(point.x, point.y - 14 * dpr);
+      context.lineTo(point.x, point.y - 7 * dpr);
+      context.moveTo(point.x, point.y + 7 * dpr);
+      context.lineTo(point.x, point.y + 14 * dpr);
+      context.lineWidth = 2 * dpr;
+      context.strokeStyle = gnssColor(satelliteGnssIdFromPrn(prediction.PRN));
+      context.stroke();
+    }
     for (const satellite of [...satellites].sort((left, right) => Number(right.used) - Number(left.used))) {
       const point = satelliteSkyPoint(satellite, centerX, centerY, radius);
       if (!point) continue;
       satelliteSkyPoints.push({ ...point, kind: "receiver", satellite });
       const color = gnssColor(satellite.gnssId);
       context.beginPath();
+      if (satellite.correctionsUsed) context.rect(point.x - 6 * dpr, point.y - 6 * dpr, 12 * dpr, 12 * dpr);
+      else context.arc(point.x, point.y, 6 * dpr, 0, Math.PI * 2);
+      context.lineWidth = dpr; context.strokeStyle = "#090c12"; context.stroke();
+      context.beginPath();
       if (satellite.correctionsUsed) context.rect(point.x - 5 * dpr, point.y - 5 * dpr, 10 * dpr, 10 * dpr);
       else context.arc(point.x, point.y, 5 * dpr, 0, Math.PI * 2);
       context.lineWidth = 1.5 * dpr; context.strokeStyle = color; context.fillStyle = satellite.used ? color : "#090c12"; context.fill(); context.stroke();
+      if (satelliteSelectedKey === `${satellite.gnssId}:${satellite.svId}`) {
+        context.beginPath(); context.arc(point.x, point.y, 9 * dpr, 0, Math.PI * 2);
+        context.lineWidth = 2 * dpr; context.strokeStyle = "#ffffff"; context.stroke();
+      }
       const text = `${["G", "S", "E", "C", "I", "J", "R", "N"][satellite.gnssId] || "?"}${satellite.svId}`;
       const labelWidth = context.measureText(text).width; const labelHeight = 12 * dpr;
       const candidates = [[point.x + 8 * dpr, point.y - 14 * dpr], [point.x - labelWidth - 8 * dpr, point.y - 14 * dpr], [point.x + 8 * dpr, point.y + 4 * dpr], [point.x - labelWidth - 8 * dpr, point.y + 4 * dpr]];
@@ -2091,24 +2151,29 @@
         context.fillStyle = color; context.textAlign = "left"; context.textBaseline = "top"; context.fillText(text, position[0], position[1]);
       }
     }
-    for (const prediction of predictions) {
-      if (prediction.ELEVATION < 0) continue;
-      const point = satelliteSkyPoint({ azimuth: prediction.AZIMUTH, elevation: prediction.ELEVATION }, centerX, centerY, radius);
-      if (!point) continue;
-      satelliteSkyPoints.push({ ...point, kind: "orbit", prediction });
-      context.beginPath();
-      context.moveTo(point.x - 11 * dpr, point.y);
-      context.lineTo(point.x - 2 * dpr, point.y);
-      context.moveTo(point.x + 2 * dpr, point.y);
-      context.lineTo(point.x + 11 * dpr, point.y);
-      context.moveTo(point.x, point.y - 11 * dpr);
-      context.lineTo(point.x, point.y - 2 * dpr);
-      context.moveTo(point.x, point.y + 2 * dpr);
-      context.lineTo(point.x, point.y + 11 * dpr);
-      context.lineWidth = 2 * dpr;
-      context.strokeStyle = gnssColor(satelliteGnssIdFromPrn(prediction.PRN));
-      context.stroke();
-    }
+  }
+
+  function satelliteSkyPointTooltip(points) {
+    const live = points.filter((point) => point.kind === "receiver").map(({ satellite }) =>
+      `${satelliteGnssName(satellite.gnssId)} ${satellite.svId}, ${satellite.cno} dB-Hz, elevation ${satellite.elevation}, azimuth ${satellite.azimuth}${satellite.used ? ", used in solution" : ""}; corrections: ${satelliteCorrectionText(satellite)}`);
+    const predicted = points.filter((point) => point.kind === "orbit").map(({ prediction }) =>
+      `${prediction.PRN}, elevation ${prediction.ELEVATION.toFixed(1)}\u00b0, azimuth ${prediction.AZIMUTH.toFixed(1)}\u00b0`);
+    return [
+      live.length ? `Live: ${live.join("; ")}` : "",
+      predicted.length ? `TLE: ${predicted.join("; ")}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  function satelliteSkyHitKey(points, x, y, hitRadius) {
+    const hit = (kind) => points
+      .filter((point) => point.kind === kind && Math.hypot(point.x - x, point.y - y) <= hitRadius)
+      .sort((left, right) => Math.hypot(left.x - x, left.y - y) - Math.hypot(right.x - x, right.y - y))[0];
+    const livePoint = hit("receiver");
+    if (livePoint) return `${livePoint.satellite.gnssId}:${livePoint.satellite.svId}`;
+    const orbitPoint = hit("orbit");
+    if (!orbitPoint) return null;
+    const matchedSatellite = points.find((point) => point.kind === "receiver" && satellitePrn(point.satellite) === orbitPoint.prediction.PRN);
+    return matchedSatellite ? `${matchedSatellite.satellite.gnssId}:${matchedSatellite.satellite.svId}` : null;
   }
 
   function decodeSatelliteReport(payload) {
@@ -3505,11 +3570,68 @@
   satelliteLocationLatitude.addEventListener("change", updateSatelliteLocationControls);
   satelliteLocationLongitude.addEventListener("change", updateSatelliteLocationControls);
   syncSatelliteLocationControls();
+  let pendingSatellitePointer = null;
+  satelliteTable.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0 || event.target.closest("[data-sort], .satellite-correction-toggle")) return;
+    const row = event.target.closest(".satellite-table-row");
+    pendingSatellitePointer = row
+      ? { key: row.dataset.satelliteKey, pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+      : null;
+  });
+  document.addEventListener("pointerup", (event) => {
+    const pointer = pendingSatellitePointer;
+    pendingSatellitePointer = null;
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest(".satellite-table-row");
+    if (!satellitePointerClickMatches(pointer, event, row?.dataset.satelliteKey)) return;
+    toggleSatelliteSelection(pointer.key);
+    renderSatellites();
+  });
+  document.addEventListener("pointercancel", () => { pendingSatellitePointer = null; });
   satelliteTable.addEventListener("click", (event) => {
     const button = event.target.closest("[data-sort]");
-    if (!button) return;
-    satelliteSort.direction = satelliteSort.key === button.dataset.sort ? -satelliteSort.direction : ["cno", "elevation", "used"].includes(button.dataset.sort) ? -1 : 1;
-    satelliteSort.key = button.dataset.sort; renderSatellites();
+    if (button) {
+      satelliteSort.direction = satelliteSort.key === button.dataset.sort ? -satelliteSort.direction : ["cno", "elevation", "used"].includes(button.dataset.sort) ? -1 : 1;
+      satelliteSort.key = button.dataset.sort; renderSatellites();
+      return;
+    }
+    if (event.target.closest(".satellite-correction-toggle")) return;
+  });
+  satelliteRows.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key) || !event.target.matches("[data-satellite-key]")) return;
+    event.preventDefault();
+    toggleSatelliteSelection(event.target.dataset.satelliteKey);
+    renderSatellites();
+  });
+  document.addEventListener("click", (event) => {
+    const toggle = event.target.closest(".satellite-correction-toggle");
+    if (!toggle) {
+      satelliteCorrectionPopup.hidden = true;
+      satelliteCorrectionPopupKey = null;
+      for (const button of satelliteTable.querySelectorAll(".satellite-correction-toggle")) button.setAttribute("aria-expanded", "false");
+      return;
+    }
+    const key = toggle.dataset.satelliteKey;
+    if (!satelliteCorrectionPopup.hidden && satelliteCorrectionPopupKey === key) {
+      satelliteCorrectionPopup.hidden = true;
+      satelliteCorrectionPopupKey = null;
+      toggle.setAttribute("aria-expanded", "false");
+      return;
+    }
+    satelliteCorrectionPopupKey = key;
+    for (const button of satelliteTable.querySelectorAll(".satellite-correction-toggle")) {
+      button.setAttribute("aria-expanded", button === toggle ? "true" : "false");
+    }
+    const satellite = satelliteReports[satelliteSource.value]?.satellites.find((candidate) => `${candidate.gnssId}:${candidate.svId}` === key);
+    satelliteCorrectionPopup.textContent = satellite ? satelliteCorrectionText(satellite) : "Correction details are unavailable.";
+    satelliteCorrectionPopup.hidden = false;
+    const bounds = toggle.getBoundingClientRect();
+    const popupBounds = satelliteCorrectionPopup.getBoundingClientRect();
+    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - popupBounds.width - 8));
+    const top = bounds.bottom + popupBounds.height + 8 <= window.innerHeight
+      ? bounds.bottom + 8
+      : Math.max(8, bounds.top - popupBounds.height - 8);
+    satelliteCorrectionPopup.style.left = `${left}px`;
+    satelliteCorrectionPopup.style.top = `${top}px`;
   });
   satellitePredictionRefresh.addEventListener("click", () => requestSatelliteOrbitPredictions(satelliteSource.value, Date.now(), true));
   satelliteFeedUploadButton.addEventListener("click", () => satelliteFeedUpload.click());
@@ -3535,11 +3657,30 @@
   satelliteSky.addEventListener("pointermove", (event) => {
     const bounds = satelliteSky.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
     const x = (event.clientX - bounds.left) * dpr; const y = (event.clientY - bounds.top) * dpr;
-    const point = satelliteSkyPoints.find((candidate) => Math.hypot(candidate.x - x, candidate.y - y) <= 10 * dpr);
-    satelliteSky.title = !point ? "Satellite sky view" : point.kind === "orbit"
-      ? `${point.prediction.PRN}: online TLE prediction, elevation ${point.prediction.ELEVATION.toFixed(1)}\u00b0, azimuth ${point.prediction.AZIMUTH.toFixed(1)}\u00b0`
-      : `${satelliteGnssName(point.satellite.gnssId)} ${point.satellite.svId}: ${point.satellite.cno} dB-Hz, elevation ${point.satellite.elevation}, azimuth ${point.satellite.azimuth}${point.satellite.used ? ", used in solution" : ""}; corrections: ${satelliteCorrectionText(point.satellite)}`;
+    const points = satelliteSkyPoints.filter((candidate) => Math.hypot(candidate.x - x, candidate.y - y) <= 10 * dpr);
+    satelliteSky.title = points.length ? satelliteSkyPointTooltip(points) : "Satellite sky view";
   });
+  let pendingSkyPointer = null;
+  satelliteSky.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    pendingSkyPointer = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+  });
+  document.addEventListener("pointerup", (event) => {
+    const pointer = pendingSkyPointer;
+    pendingSkyPointer = null;
+    if (!pointer || !event.isPrimary || event.pointerId !== pointer.pointerId
+      || Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 6) return;
+    const bounds = satelliteSky.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) return;
+    const dpr = window.devicePixelRatio || 1;
+    const x = (event.clientX - bounds.left) * dpr;
+    const y = (event.clientY - bounds.top) * dpr;
+    const key = satelliteSkyHitKey(satelliteSkyPoints, x, y, 14 * dpr);
+    if (!key) return;
+    toggleSatelliteSelection(key);
+    renderSatellites();
+  });
+  document.addEventListener("pointercancel", () => { pendingSkyPointer = null; });
   new ResizeObserver(() => { if (!satellitesPanel.hidden) renderSatellites(); }).observe(satelliteSky);
   baud.addEventListener("change", () => { if (baud.value !== "auto") { settings.baudByReceiver[receiver.value] = Number(baud.value); saveSettings(); } });
   receiver.value = settings.lastReceiver;

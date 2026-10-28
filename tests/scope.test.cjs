@@ -1164,7 +1164,7 @@ test("sky labels avoid elevation captions and omit below-horizon markers", () =>
     get(target, property) { return target[property] ?? (() => {}); },
   });
   const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "satellitePrn", "satelliteGnssIdFromPrn", "gnssColor"], {
-    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
+    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [], satelliteSelectedKey: null,
   });
   context.drawSatelliteSky([
     { gnssId: 0, svId: 1, elevation: 10, azimuth: 0, used: true },
@@ -1182,14 +1182,14 @@ test("sky uses square corrected markers independently of solution use", () => {
     get(target, property) { return target[property] ?? (() => {}); },
   });
   const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "satellitePrn", "satelliteGnssIdFromPrn", "gnssColor"], {
-    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
+    satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [], satelliteSelectedKey: null,
   });
   context.drawSatelliteSky([
     { gnssId: 0, svId: 1, elevation: 45, azimuth: 0, used: true, correctionsUsed: false },
     { gnssId: 2, svId: 2, elevation: 45, azimuth: 90, used: true, correctionsUsed: true },
     { gnssId: 2, svId: 3, elevation: 45, azimuth: 180, used: false, correctionsUsed: true },
   ]);
-  assert.deepEqual(markers, ["circle", "square", "square"]);
+  assert.deepEqual(markers, ["circle", "square", "square", "square", "square"]);
 });
 
 test("online TLE sky markers use distinct, enlarged crosshairs and PRN-matched connector lines", () => {
@@ -1206,6 +1206,7 @@ test("online TLE sky markers use distinct, enlarged crosshairs and PRN-matched c
   });
   const context = loadFunctions(["drawSatelliteSky", "satelliteSkyPoint", "satellitePrn", "satelliteGnssIdFromPrn", "gnssColor"], {
     satelliteSky: { getContext: () => drawing }, sizeCanvas: () => ({ width: 600, height: 600 }), window: { devicePixelRatio: 1 }, satelliteSkyPoints: [],
+    satelliteSelectedKey: null,
     gnssColor(gnssId) { return ["#ffb347", "#00ffff", "#66ff88", "#ff7262", "#ffffff", "#ffff66", "#f27bfd", "#88aaff"][gnssId] || "#aaaaaa"; },
   });
   context.drawSatelliteSky([
@@ -1218,9 +1219,62 @@ test("online TLE sky markers use distinct, enlarged crosshairs and PRN-matched c
   assert.equal(context.satelliteSkyPoints.filter(({ kind }) => kind === "orbit").length, 2);
   assert.equal(commands.filter(([command, color]) => command === "stroke" && color === "#ffb347").length, 3);
   assert.equal(commands.filter(([command, color]) => command === "stroke" && color === "#66ff88").length, 2);
-  const crosshairMoves = commands.filter(([command, x]) => command === "moveTo" && (x === context.satelliteSkyPoints[2].x - 11 || x === context.satelliteSkyPoints[2].x + 2));
+  const predictedPoint = context.satelliteSkyPoints.find(({ kind }) => kind === "orbit");
+  const crosshairMoves = commands.filter(([command, x]) => command === "moveTo" && (x === predictedPoint.x - 14 || x === predictedPoint.x + 7));
   assert.equal(crosshairMoves.length, 2);
+  const firstCrosshairIndex = commands.findIndex(([command, x]) => command === "moveTo" && x === predictedPoint.x - 14);
+  const firstLiveBorderIndex = commands.findIndex(([command, color]) => command === "stroke" && color === "#090c12");
+  assert.ok(firstCrosshairIndex < firstLiveBorderIndex);
+  assert.ok(commands.some(([command, , , radius]) => command === "arc" && radius === 6));
   assert.ok(!commands.some(([command, , , radius]) => command === "arc" && radius === 7));
+  context.satelliteSelectedKey = "0:5";
+  context.drawSatelliteSky([{ gnssId: 0, svId: 5, elevation: 45, azimuth: 0, used: true }]);
+  assert.ok(commands.some(([command, , , radius]) => command === "arc" && radius === 9));
+});
+
+test("overlapping live and TLE sky points share one hover tooltip", () => {
+  const context = loadFunctions(["satelliteSkyPointTooltip", "satelliteGnssName", "satelliteCorrectionText"], {});
+  const tooltip = context.satelliteSkyPointTooltip([
+    { kind: "receiver", satellite: { gnssId: 2, svId: 12, cno: 42, elevation: 45, azimuth: 90, used: true, correctionSources: ["HAS"], correctionTypes: ["Pseudorange"] } },
+    { kind: "orbit", prediction: { PRN: "E12", ELEVATION: 46.5, AZIMUTH: 92.5 } },
+  ]);
+  assert.match(tooltip, /Live: Galileo 12, 42 dB-Hz.*corrections: HAS, Pseudorange/);
+  assert.match(tooltip, /\nTLE: E12, elevation 46\.5°, azimuth 92\.5°/);
+});
+
+test("sky-map hit testing selects a live satellite and maps a TLE marker to its matching live satellite", () => {
+  const satellite = { gnssId: 2, svId: 12 };
+  const points = [
+    { kind: "orbit", x: 100, y: 100, prediction: { PRN: "E12" } },
+    { kind: "receiver", x: 101, y: 100, satellite },
+    { kind: "receiver", x: 200, y: 200, satellite: { gnssId: 0, svId: 5 } },
+  ];
+  const context = loadFunctions(["satelliteSkyHitKey", "satellitePrn"], {});
+  assert.equal(context.satelliteSkyHitKey(points, 100, 100, 14), "2:12");
+  assert.equal(context.satelliteSkyHitKey(points, 200, 200, 14), "0:5");
+  assert.equal(context.satelliteSkyHitKey(points, 300, 300, 14), null);
+  assert.equal(context.satelliteSkyHitKey([{ kind: "orbit", x: 100, y: 100, prediction: { PRN: "E13" } }], 100, 100, 14), null);
+});
+
+test("clicking the selected satellite toggles its sky-view highlight off", () => {
+  const context = loadFunctions(["toggleSatelliteSelection"], { satelliteSelectedKey: null });
+  context.toggleSatelliteSelection("2:12");
+  assert.equal(context.satelliteSelectedKey, "2:12");
+  context.toggleSatelliteSelection("2:12");
+  assert.equal(context.satelliteSelectedKey, null);
+  context.toggleSatelliteSelection("2:12");
+  context.toggleSatelliteSelection("0:5");
+  assert.equal(context.satelliteSelectedKey, "0:5");
+});
+
+test("satellite pointer selection ignores scroll drags and stale or different rows", () => {
+  const context = loadFunctions(["satellitePointerClickMatches"], {});
+  const pointer = { key: "2:12", pointerId: 1, x: 100, y: 120 };
+  const event = { isPrimary: true, pointerId: 1, clientX: 102, clientY: 121 };
+  assert.equal(context.satellitePointerClickMatches(pointer, event, "2:12"), true);
+  assert.equal(context.satellitePointerClickMatches(pointer, event, "0:5"), false);
+  assert.equal(context.satellitePointerClickMatches(pointer, { ...event, clientY: 130 }, "2:12"), false);
+  assert.equal(context.satellitePointerClickMatches(pointer, { ...event, pointerId: 2 }, "2:12"), false);
 });
 
 test("online sky-map constellation filters select matching predictions or hide all predictions", () => {
@@ -1553,7 +1607,8 @@ test("satellites view marks stale data and preserves recorded source selection",
     settings: { satelliteLocationLocked: false, satelliteLocationMode: "receiver" },
     satelliteLocationLatitude: { value: "" }, satelliteLocationLongitude: { value: "" },
     satelliteStatus: { dataset: {} }, satelliteCount: {}, satelliteRows: {}, satelliteTable: { querySelectorAll: () => [] },
-    satellitePredictionStatus: {}, satelliteComparisonRows: {},
+    satellitePredictionStatus: {}, satelliteComparisonRows: {}, satelliteCorrectionPopup: { hidden: true },
+    satelliteCorrectionPopupKey: null, satelliteSelectedKey: null,
     replayData: null, gnssColor: () => "#66ff88", drawSatelliteSky() {}, renderSatellitePredictionComparison() {}, requestSatelliteOrbitPredictions() {},
   });
   context.renderSatellites(1000);
@@ -1561,10 +1616,15 @@ test("satellites view marks stale data and preserves recorded source selection",
   assert.match(context.satelliteRows.innerHTML, /None used/);
   assert.match(context.satelliteRows.innerHTML, /Mixed/);
   assert.match(context.satelliteRows.innerHTML, /1 of 2 signals authenticated/);
+  context.satelliteReports.NAV.satellites[0].correctionsUsed = true;
   context.satelliteReports.NAV.satellites[0].correctionSources = ["HAS"];
   context.satelliteReports.NAV.satellites[0].correctionTypes = ["Pseudorange"];
   context.renderSatellites(1000);
-  assert.match(context.satelliteRows.innerHTML, /HAS, Pseudorange/);
+  assert.match(context.satelliteRows.innerHTML, />YES<\/button>/);
+  assert.match(context.satelliteRows.innerHTML, /--signal-strength:70%/);
+  context.satelliteSelectedKey = "2:12";
+  context.renderSatellites(1000);
+  assert.match(context.satelliteRows.innerHTML, /aria-selected="true"/);
   assert.match(context.satelliteCount.textContent, /1 shown.*1 reported.*1 used/);
   context.satelliteReports.NAV.satellites.push({ gnssId: 2, svId: 24, cno: 30, elevation: 20, azimuth: 180, used: false, quality: 4, health: 1 });
   context.satelliteUsedOnly.checked = true;
@@ -1593,6 +1653,19 @@ test("satellites view marks stale data and preserves recorded source selection",
   context.satelliteUsedOnly.checked = true;
   context.renderSatellites(7000);
   assert.match(context.satelliteRows.innerHTML, /No used satellites match/);
+});
+
+test("satellite table has a fixed scroll area and correction popup host", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "insight.css"), "utf8");
+  assert.match(html, /id="satellite-table-wrap"/);
+  assert.match(html, /id="satellite-comparison-table-wrap"/);
+  assert.match(html, /id="satellite-correction-popup" role="dialog"/);
+  assert.match(css, /#satellite-comparison-table-wrap \{ height: 360px; overflow: auto; \}/);
+  assert.match(css, /#satellite-live-data \{ display: flex; min-height: 0; flex-direction: column; \}/);
+  assert.match(css, /#satellite-table-wrap \{ height: 0; min-height: 360px; flex: 1 1 auto; overflow: auto; \}/);
+  assert.match(css, /\.satellite-name \{ color: var\(--satellite-color\); \}/);
+  assert.match(css, /#satellite-correction-popup \{ position: fixed;/);
 });
 
 test("satellites tab activates between the existing views without leaving another panel visible", () => {
@@ -2042,7 +2115,7 @@ test("NAV-TIMEUTC parsing retains UTC validity and accuracy", () => {
 
 test("OSNMA clock shows receiver freshness, local-time preference, and separate verification status", () => {
   const now = 100000;
-  const state = () => ({ textContent: "", dataset: {} });
+  const state = () => ({ textContent: "", innerHTML: "", dataset: {} });
   const context = loadFunctions(["refreshOsnmaClock"], {
     settings: { enableOsnma: true },
     latestPvtClock: { utcMs: Date.UTC(2026, 9, 19), receivedAt: now - 125, tAccNs: 80, validDate: true, validTime: true, fullyResolved: true, confirmedDate: true, confirmedTime: true, authTime: true, authFlagsAvailable: true },
@@ -2052,14 +2125,14 @@ test("OSNMA clock shows receiver freshness, local-time preference, and separate 
     latestOsnmaTimeCheck: { status: 3, authenticated: true }, liveConnectionId: 1,
   });
   context.refreshOsnmaClock(now);
-  assert.match(context.osnmaClockValue.textContent, /UTC$/);
+  assert.match(context.osnmaClockValue.innerHTML, /<span class="osnma-clock-time">.*<\/span>.* UTC$/);
   assert.match(context.osnmaClockPvt.textContent, /output time authenticated \(validated against an external trusted time source\)/);
   assert.equal(context.osnmaClockAge.dataset.state, "good");
   assert.match(context.osnmaClockAuth.textContent, /check passed/);
   assert.equal(context.osnmaClockAuth.dataset.state, "good");
   context.osnmaClockSettings.showLocalTime = true;
   context.refreshOsnmaClock(now);
-  assert.match(context.osnmaClockValue.textContent, /local$/);
+  assert.match(context.osnmaClockValue.innerHTML, /<span class="osnma-clock-time">.*<\/span>.* local$/);
   context.settings.enableOsnma = false;
   context.refreshOsnmaClock(now);
   assert.equal(context.osnmaClockAuth.textContent, "OSNMA disabled in settings");

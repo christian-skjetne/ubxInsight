@@ -60,7 +60,7 @@ main { width: 100%; margin: 0; padding: 12px; }
 #satellite-status[data-state="stale"] { color: #ffff66; }
 #satellite-constellations { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 12px 0 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; }
 #satellite-constellations legend { padding: 0 6px; color: var(--muted); }
-#satellite-views { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.3fr); gap: 12px; align-items: start; }
+#satellite-views { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.3fr); gap: 12px; align-items: stretch; }
 #satellite-sky { width: 100%; height: auto; aspect-ratio: 1; }
 .satellite-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 10px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .satellite-legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -78,11 +78,24 @@ main { width: 100%; margin: 0; padding: 12px; }
 .satellite-prediction-toolbar button { flex: 0 0 auto; padding: 5px 8px; font-size: 12px; }
 #satellite-comparison-table { min-width: 460px; font-size: 12px; font-variant-numeric: tabular-nums; }
 #satellite-comparison-table th, #satellite-comparison-table td { padding: 6px; }
+#satellite-comparison-table-wrap { height: 360px; overflow: auto; }
+#satellite-comparison-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
 .satellite-prediction-note { margin: 0; padding: 8px 12px 12px; color: var(--muted); font-size: 11px; }
 #satellite-table { table-layout: fixed; min-width: 640px; font-variant-numeric: tabular-nums; }
 #satellite-table th, #satellite-table td { padding: 8px 6px; overflow-wrap: anywhere; }
+#satellite-live-data { display: flex; min-height: 0; flex-direction: column; }
+#satellite-table-wrap { height: 0; min-height: 360px; flex: 1 1 auto; overflow: auto; }
+#satellite-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
 #satellite-table th:first-child { width: 20%; }
 #satellite-table th:last-child { width: 27%; }
+.satellite-table-row { cursor: pointer; }
+.satellite-table-row:hover, .satellite-table-row:focus-visible, .satellite-table-row[aria-selected="true"] { background: #293447; }
+.satellite-name { position: relative; display: block; isolation: isolate; overflow: hidden; padding: 2px 4px; border-radius: 2px; }
+.satellite-name { color: var(--satellite-color); }
+.satellite-name::before { position: absolute; z-index: -1; inset: 0 auto 0 0; width: var(--signal-strength); background: var(--satellite-color); opacity: .24; content: ""; }
+.satellite-correction-toggle { width: auto; height: auto; min-height: 24px; padding: 2px 5px; background: transparent; border-color: transparent; color: inherit; font: inherit; }
+.satellite-correction-toggle:hover, .satellite-correction-toggle:focus-visible { background: var(--panel); border-color: var(--line); }
+#satellite-correction-popup { position: fixed; z-index: 40; width: min(360px, calc(100vw - 16px)); max-height: min(45vh, 280px); overflow: auto; padding: 9px 11px; border: 1px solid var(--line); border-radius: 4px; background: #111722; color: var(--text); font-size: 12px; line-height: 1.45; white-space: pre-wrap; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
 .satellite-sort { display: flex; align-items: center; gap: 3px; width: 100%; height: auto; min-height: 32px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; }
 .satellite-sort > span:first-child { min-width: 0; }
 .satellite-sort .material-symbols-outlined { flex-basis: 12px; width: 12px; height: 12px; margin: 0; font-size: 12px; color: currentColor; transform: none; }
@@ -223,7 +236,8 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .osnma-clock-display [data-state="waiting"] { color: #ffff66; }
 .osnma-clock-display [data-state="bad"] { color: #ff7262; }
 .osnma-clock-face { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 12px; }
-.osnma-clock-face strong { color: var(--text); font-size: 26px; font-variant-numeric: tabular-nums; }
+.osnma-clock-face strong { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.osnma-clock-time { color: var(--text); font-size: clamp(32px, 4vw, 42px); line-height: 1.15; }
 .osnma-clock-face label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .osnma-clock-face input { width: 15px; height: 15px; accent-color: #59c3c3; }
 .osnma-clock-evidence { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 0 12px 12px; }
