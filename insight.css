@@ -152,13 +152,64 @@ canvas { display: block; width: 100%; background: #090c12; }
 #position-track { background: #090c12; cursor: grab; }
 #position-track:active { cursor: grabbing; }
 #position-info { color: var(--muted); font-variant-numeric: tabular-nums; }
-.gnss-threat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 10px; border-block: 1px solid var(--line); background: var(--panel); }
-.gnss-threat-indicator { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 9px 12px; border-left: 3px solid var(--line); }
-.gnss-threat-summary-compact { gap: 0px 8px; border: 0; background: transparent; }
-.gnss-threat-summary-compact .gnss-threat-indicator { flex-direction: row; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 8px; border-left-width: 2px; background: var(--panel); }
-.gnss-threat-summary-compact .gnss-threat-indicator span { font-size: 10px; }
+/*GNSS signals*/
+.gnss-threat-summary { 
+	display: grid; 
+	grid-template-columns: repeat(4, minmax(0, 1fr)); 
+	gap: 8px; 
+	/*margin-top: 14px;*/ 
+	margin-bottom: 10px; }
+/*	display: grid; 
+	grid-template-columns: repeat(4, minmax(0, 1fr)); 
+	margin-bottom: 10px; 
+	border-block: 1px solid var(--line); 
+	background: var(--panel); }*/
+.gnss-threat-indicator { 
+	display: flex; 
+	min-width: 0; 
+	flex-direction: column; 
+	gap: 4px; 
+	padding: 9px 12px; 
+	border: 1px solid var(--line);
+	border-left: 3px solid var(--line); 
+	border-radius: 4px;
+	background: var(--panel);
+}
+/*All tabs*/
+.gnss-threat-summary-compact { 
+	display: grid; 
+	grid-template-columns: repeat(4, minmax(0, 1fr)); 
+	gap: 8px; 
+	margin-top: 14px; }
+/*	gap: 0px 6px; 
+	border: 0; 
+	background: transparent; }*/
+.gnss-threat-summary-compact .gnss-threat-indicator { 
+	border: 1px solid var(--line); 
+	border-left: 3px solid var(--line); 
+	border-radius: 4px; 
+	background: var(--panel); 
+	flex-direction: row; 
+	align-items: center; 
+	justify-content: space-between; 
+}
+/*	flex-direction: row; 
+	align-items: center; 
+	justify-content: space-between; 
+	gap: 6px; 
+	padding: 8px 8px; 
+	border-left-width: 3px; 
+	border-top: 1px solid var(--line);
+	border-bottom: 1px solid var(--line);
+	border-right: 1px solid var(--line); 
+	background: var(--panel); }*/
+.gnss-threat-summary-compact .gnss-threat-indicator span { font-size: 11px; }
 .gnss-threat-summary-compact .gnss-threat-indicator strong { font-size: 11px; text-align: right; }
-.osnma-overview .gnss-threat-indicator, .osnma-clock-evidence .gnss-threat-indicator, .osnma-status-grid .gnss-threat-indicator, .osnma-auth-grid .gnss-threat-indicator { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 4px; background: #121720; }
+.osnma-overview .gnss-threat-indicator, .osnma-clock-evidence .gnss-threat-indicator, .osnma-status-grid .gnss-threat-indicator, .osnma-auth-grid .gnss-threat-indicator { 
+	border: 1px solid var(--line); 
+	border-left: 3px solid var(--line); 
+	border-radius: 4px; 
+	background: #121720; }
 .gnss-threat-indicator span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .gnss-threat-indicator strong { font-size: 13px; font-weight: 600; }
 .gnss-threat-indicator[data-state="good"] { border-left-color: #66ff88; }
@@ -212,7 +263,11 @@ body .maplibregl-ctrl-attrib, body .maplibregl-ctrl-attrib.maplibregl-compact { 
 .signal-plot.x20-security canvas { height: clamp(560px, 66vh, 900px); }
 .security-summary { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 12px; line-height: 1.5; }
 #sec-event-log { max-height: 180px; overflow-y: auto; white-space: pre-line; }
-.osnma-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.osnma-overview { 
+	display: grid; 
+	grid-template-columns: repeat(4, minmax(0, 1fr)); 
+	gap: 8px; 
+	margin-top: 14px; }
 .osnma-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 .osnma-actions button { display: inline-flex; align-items: center; gap: 7px; }
 .osnma-actions .material-symbols-outlined { margin: 0; }
