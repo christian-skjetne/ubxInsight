@@ -152,8 +152,12 @@ canvas { display: block; width: 100%; background: #090c12; }
 #position-track { background: #090c12; cursor: grab; }
 #position-track:active { cursor: grabbing; }
 #position-info { color: var(--muted); font-variant-numeric: tabular-nums; }
-#gnss-threat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 14px; border-block: 1px solid var(--line); background: var(--panel); }
+.gnss-threat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 10px; border-block: 1px solid var(--line); background: var(--panel); }
 .gnss-threat-indicator { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 9px 12px; border-left: 3px solid var(--line); }
+.gnss-threat-summary-compact { gap: 0px 8px; border: 0; background: transparent; }
+.gnss-threat-summary-compact .gnss-threat-indicator { flex-direction: row; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 8px; border-left-width: 2px; background: var(--panel); }
+.gnss-threat-summary-compact .gnss-threat-indicator span { font-size: 10px; }
+.gnss-threat-summary-compact .gnss-threat-indicator strong { font-size: 11px; text-align: right; }
 .osnma-overview .gnss-threat-indicator, .osnma-clock-evidence .gnss-threat-indicator, .osnma-status-grid .gnss-threat-indicator, .osnma-auth-grid .gnss-threat-indicator { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 4px; background: #121720; }
 .gnss-threat-indicator span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .gnss-threat-indicator strong { font-size: 13px; font-weight: 600; }
@@ -294,5 +298,5 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .playback-controls button { display: inline-flex; align-items: center; gap: 5px; }
 .playback-controls label { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 800px) { .osnma-overview, .osnma-status-grid, .osnma-auth-grid, .osnma-clock-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } .status-row { gap: 4px 12px; } #receiver-status-row #status { flex: 1 1 100%; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } #gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }
+@media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } .status-row { gap: 4px 12px; } #receiver-status-row #status { flex: 1 1 100%; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } .gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }
 @media (max-width: 650px) { .osnma-clock-row { grid-template-columns: minmax(0, 1fr); justify-items: start; } .osnma-overview, .osnma-status-grid, .osnma-auth-grid, .osnma-clock-evidence { grid-template-columns: minmax(0, 1fr); } }

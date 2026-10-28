@@ -188,7 +188,8 @@
   const positionInfo = document.querySelector("#position-info");
   const signalsEmpty = document.querySelector("#signals-empty");
   const constellationFilter = document.querySelector("#constellation-filter");
-  const gnssThreatIndicators = [...document.querySelectorAll("#gnss-threat-summary .gnss-threat-indicator")];
+  addCompactGnssThreatSummaries();
+  const gnssThreatIndicators = [...document.querySelectorAll(".gnss-threat-summary .gnss-threat-indicator")];
   const signalCharts = { cno: document.querySelector("#cno-chart"), doppler: document.querySelector("#doppler-chart"), jamState: document.querySelector("#jam-state-chart"), jamIndex: document.querySelector("#jam-index-chart"), agc: document.querySelector("#agc-chart"), spoof: document.querySelector("#spoof-chart"), secState: document.querySelector("#sec-state-chart"), secFrequency: document.querySelector("#sec-frequency-chart") };
   const secSecuritySummary = document.querySelector("#sec-security-summary");
   const secEventLog = document.querySelector("#sec-event-log");
@@ -988,6 +989,16 @@
     return states[kind]?.[value] ? { label: states[kind][value][0], state: states[kind][value][1] } : { label: `Unknown (${value})`, state: "waiting" };
   }
 
+  function addCompactGnssThreatSummaries() {
+    const summary = document.querySelector("#gnss-threat-summary");
+    document.querySelectorAll('[role="tabpanel"]:not(#signals-panel)').forEach((panel) => {
+      const compactSummary = summary.cloneNode(true);
+      compactSummary.removeAttribute("id");
+      compactSummary.classList.add("gnss-threat-summary-compact");
+      panel.prepend(compactSummary);
+    });
+  }
+
   function renderGnssThreatSummary() {
     const statuses = [
       gnssThreatPresentation("monRfJam", receiverThreat.monRfJam),
@@ -996,8 +1007,9 @@
       gnssThreatPresentation("secSpoof", receiverThreat.secSpoof, receiverThreat.secSpoofEnabled !== false),
     ];
     gnssThreatIndicators.forEach((indicator, index) => {
-      indicator.dataset.state = statuses[index].state;
-      indicator.querySelector("strong").textContent = statuses[index].label;
+      const status = statuses[index % statuses.length];
+      indicator.dataset.state = status.state;
+      indicator.querySelector("strong").textContent = status.label;
     });
   }
 
@@ -2705,13 +2717,19 @@
   function parseSecSigLog(payload) {
     if (payload.length < 8) return;
     const count = Math.min(payload[1], Math.floor((payload.length - 8) / 8));
-    const detectionNames = ["Unknown", "Jamming", "Spoofing"]; const eventNames = ["Stopped", "Started", "Triggered", "Ongoing"];
-    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    const detectionNames = ["Simulated signal", "Abnormal signal (unsupported)", "INS/GNSS mismatch (unsupported)", "Abrupt GNSS signal changes", "Jamming indicated", "Navigation-data authentication failed", "Replayed signals"];
+    const eventNames = ["Indication started", "Indication stopped", "Indication triggered", "Indication timed out"];
+    secEvents.length = 0;
     for (let index = 0; index < count; index++) {
       const offset = 8 + index * 8; const elapsed = new DataView(payload.buffer, payload.byteOffset + offset, 4).getUint32(0, true); const detection = payload[offset + 4]; const event = payload[offset + 5];
-      secEvents.unshift(`${now}  ${detectionNames[detection] || `Type ${detection}`} - ${eventNames[event] || `Event ${event}`} (${elapsed} ms ago)`);
+      let elapsedLabel;
+      if (elapsed === 0xffffffff) elapsedLabel = "more than 45 days ago";
+      else if (elapsed < 60) elapsedLabel = `${elapsed}s ago`;
+      else if (elapsed < 3600) elapsedLabel = `${Math.floor(elapsed / 60)}m ${elapsed % 60}s ago`;
+      else if (elapsed < 86400) elapsedLabel = `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m ago`;
+      else elapsedLabel = `${Math.floor(elapsed / 86400)}d ${Math.floor((elapsed % 86400) / 3600)}h ago`;
+      secEvents.unshift(`${detectionNames[detection] || `Detection type ${detection}`} - ${eventNames[event] || `Event type ${event}`} (${elapsedLabel})`);
     }
-    if (secEvents.length > 25) secEvents.length = 25;
     secEventLog.innerHTML = `<strong>SEC-SIGLOG:</strong>\n${secEvents.length ? secEvents.join("\n") : "no events."}`;
     signalsEmpty.hidden = true;
   }

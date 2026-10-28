@@ -32,6 +32,62 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+test("SEC-SIGLOG renders documented detection and event types with elapsed seconds", () => {
+  const context = loadFunctions(["parseSecSigLog"], {
+    secEvents: [],
+    secEventLog: { innerHTML: "" },
+    signalsEmpty: { hidden: true },
+  });
+  const events = [
+    [125, 0, 0], [60, 1, 1], [3600, 2, 2], [86400, 3, 3],
+    [12, 4, 3], [0xffffffff, 5, 0], [1, 6, 1], [3, 9, 8],
+  ];
+  const payload = new Uint8Array(8 + events.length * 8);
+  payload[1] = events.length;
+  const data = new DataView(payload.buffer);
+  events.forEach(([elapsed, detection, event], index) => {
+    const offset = 8 + index * 8;
+    data.setUint32(offset, elapsed, true);
+    payload[offset + 4] = detection;
+    payload[offset + 5] = event;
+  });
+
+  context.parseSecSigLog(payload);
+
+  assert.match(context.secEventLog.innerHTML, /Simulated signal - Indication started \(2m 5s ago\)/);
+  assert.match(context.secEventLog.innerHTML, /Abnormal signal \(unsupported\) - Indication stopped \(1m 0s ago\)/);
+  assert.match(context.secEventLog.innerHTML, /INS\/GNSS mismatch \(unsupported\) - Indication triggered \(1h 0m ago\)/);
+  assert.match(context.secEventLog.innerHTML, /Abrupt GNSS signal changes - Indication timed out \(1d 0h ago\)/);
+  assert.match(context.secEventLog.innerHTML, /Jamming indicated - Indication timed out \(12s ago\)/);
+  assert.match(context.secEventLog.innerHTML, /Navigation-data authentication failed - Indication started \(more than 45 days ago\)/);
+  assert.match(context.secEventLog.innerHTML, /Replayed signals - Indication stopped \(1s ago\)/);
+  assert.match(context.secEventLog.innerHTML, /Detection type 9 - Event type 8 \(3s ago\)/);
+  assert.equal(context.signalsEmpty.hidden, true);
+});
+
+test("SEC-SIGLOG replaces its event snapshot on repeated polls", () => {
+  const context = loadFunctions(["parseSecSigLog"], {
+    secEvents: [],
+    secEventLog: { innerHTML: "" },
+    signalsEmpty: { hidden: true },
+  });
+  const makePayload = (elapsed) => {
+    const payload = new Uint8Array(16);
+    payload[1] = 1;
+    new DataView(payload.buffer).setUint32(8, elapsed, true);
+    payload[12] = 4;
+    payload[13] = 0;
+    return payload;
+  };
+
+  context.parseSecSigLog(makePayload(60));
+  context.parseSecSigLog(makePayload(61));
+
+  assert.equal(context.secEvents.length, 1);
+  assert.equal((context.secEventLog.innerHTML.match(/Jamming indicated/g) || []).length, 1);
+  assert.match(context.secEventLog.innerHTML, /1m 1s ago/);
+});
+
 test("offline library copies are used before starting the app", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   const loader = /<script>\s*((?:\s|.)*?)\s*<\/script>\s*<\/body>/.exec(html);
@@ -781,6 +837,56 @@ test("GNSS threat summary distinguishes status severity and disabled detection",
   check("secSpoof", 3, "Affirmed", "bad");
   check("secJam", 1, "Detection off", "off", false);
   check("navSpoof", 0, "Inactive", "off");
+});
+
+test("compact GNSS threat summaries appear on every tab and share the same live statuses", () => {
+  const makeSummary = () => {
+    const indicators = Array.from({ length: 4 }, () => {
+      const status = { textContent: "Waiting" };
+      return { dataset: { state: "waiting" }, querySelector: () => status, status };
+    });
+    const classes = new Set(["gnss-threat-summary"]);
+    return {
+      id: "gnss-threat-summary",
+      classList: { add: (value) => classes.add(value), contains: (value) => classes.has(value) },
+      removeAttribute(name) { if (name === "id") this.id = ""; },
+      cloneNode() { return makeSummary(); },
+      querySelectorAll: () => indicators,
+      indicators,
+    };
+  };
+  const sourceSummary = makeSummary();
+  const panels = Array.from({ length: 4 }, () => ({ prepend(summary) { this.summary = summary; } }));
+  const document = {
+    querySelector(selector) {
+      assert.equal(selector, "#gnss-threat-summary");
+      return sourceSummary;
+    },
+    querySelectorAll(selector) {
+      if (selector === '[role="tabpanel"]:not(#signals-panel)') return panels;
+      assert.equal(selector, ".gnss-threat-summary .gnss-threat-indicator");
+      return [sourceSummary, ...panels.map((panel) => panel.summary)].flatMap((summary) => summary.indicators);
+    },
+  };
+  const context = loadFunctions(["addCompactGnssThreatSummaries", "gnssThreatPresentation", "renderGnssThreatSummary"], {
+    document,
+    receiverThreat: { monRfJam: 3, navSpoof: 2, secJam: 2, secSpoof: 3, secJamEnabled: true, secSpoofEnabled: true },
+  });
+
+  context.addCompactGnssThreatSummaries();
+  context.gnssThreatIndicators = document.querySelectorAll(".gnss-threat-summary .gnss-threat-indicator");
+  context.renderGnssThreatSummary();
+
+  assert.equal(panels.length, 4);
+  assert.ok(panels.every((panel) => panel.summary.id === "" && panel.summary.classList.contains("gnss-threat-summary-compact")));
+  const indicators = context.gnssThreatIndicators;
+  assert.equal(indicators.length, 20);
+  for (let index = 0; index < indicators.length; index += 4) {
+    assert.deepEqual(
+      Array.from(indicators.slice(index, index + 4), (indicator) => [indicator.dataset.state, indicator.status.textContent]),
+      [["bad", "Critical"], ["warning", "Indicated"], ["warning", "Warning"], ["bad", "Affirmed"]],
+    );
+  }
 });
 
 test("system stats thresholds use current CPU, memory and serial TX percentages", () => {
