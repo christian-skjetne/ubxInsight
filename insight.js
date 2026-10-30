@@ -57,6 +57,17 @@
   const replayButton = document.querySelector("#replay");
   const showPlaybackButton = document.querySelector("#show-playback");
   const settingsButton = document.querySelector("#settings");
+  const screenWakeLockToggle = document.querySelector("#screen-wake-lock");
+  const screenWakeLockStatus = document.querySelector("#screen-wake-lock-status");
+  let screenWakeLock = null;
+  let screenWakeLockEnabled = false;
+  let screenWakeLockPending = false;
+  let screenWakeLockError = "";
+  screenWakeLockToggle.addEventListener("change", toggleScreenWakeLock);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && screenWakeLockEnabled) requestScreenWakeLock();
+  });
+  renderScreenWakeLock();
   const settingsDialog = document.querySelector("#settings-dialog");
   const settingsForm = document.querySelector("#settings-form");
   const settingsClose = document.querySelector("#settings-close");
@@ -956,12 +967,12 @@
     const blockSeries = (history, colors) => history.map((values, index) => ({ label: `RF ${index + 1}`, color: colors[index % colors.length], values }));
     drawChart(signalCharts.cno, cnoSeries, { min: 0, max: 55 });
     drawChart(signalCharts.doppler, dopplerSeries, {});
-    drawChart(signalCharts.jamState, blockSeries(signalHistory.jamState, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    drawChart(signalCharts.jamState, blockSeries(signalHistory.jamState, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: -0.5, max: 3.5, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
     drawChart(signalCharts.jamIndex, blockSeries(signalHistory.jamIndex, ["#ffff00", "#ff9d00", "#44ffaa"]), { min: 0, max: 255 });
     const pgaSeries = blockSeries(signalHistory.pga, ["#ff66cc", "#ffaaaa", "#ccccff"]).map((series) => ({ ...series, min: 0, max: 55 }));
     drawChart(signalCharts.agc, [...blockSeries(signalHistory.agc, ["#44ccff", "#88eeff", "#bbeddd"]), ...pgaSeries], { min: 0, max: 8191 });
-    drawChart(signalCharts.spoof, [{ label: "Spoof", color: "#00ffff", values: signalHistory.spoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
-    drawChart(signalCharts.secState, [{ label: "Jamming", color: "#ffb347", values: signalHistory.secJam }, { label: "Spoofing", color: "#ff66cc", values: signalHistory.secSpoof }], { min: 0, max: 3, yTicks: [0, 1, 2, 3], points: true, thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    drawChart(signalCharts.spoof, [{ label: "Spoof", color: "#00ffff", values: signalHistory.spoof }], { min: -0.5, max: 3.5, yTicks: [0, 1, 2, 3], thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
+    drawChart(signalCharts.secState, [{ label: "Jamming", color: "#ffb347", values: signalHistory.secJam }, { label: "Spoofing", color: "#ff66cc", values: signalHistory.secSpoof }], { min: 0.5, max: 3.5, yTicks: [1, 2, 3], points: true, thresholds: [{ value: 1, color: "#44ff44" }, { value: 2, color: "#ffff44" }, { value: 3, color: "#ff4444" }] });
     renderGnssThreatSummary();
     const frequencyGuides = [...BAND_MARKERS.reduce((groups, marker) => {
       if (!groups.has(marker.frequency)) groups.set(marker.frequency, { value: marker.frequency, color: marker.color, labels: [] });
@@ -975,6 +986,61 @@
     if (signalDrawQueued) return;
     signalDrawQueued = true;
     requestAnimationFrame(() => { signalDrawQueued = false; drawSignals(); });
+  }
+
+  function renderScreenWakeLock() {
+    const supported = Boolean(navigator.wakeLock?.request);
+    const active = Boolean(screenWakeLock && !screenWakeLock.released);
+    screenWakeLockToggle.disabled = !supported || screenWakeLockPending;
+    screenWakeLockToggle.checked = screenWakeLockEnabled;
+    screenWakeLockStatus.textContent = `Screen wake lock: ${!supported ? "unavailable (requires a supported browser and secure context)" : screenWakeLockError || (screenWakeLockPending ? "updating..." : active ? "active" : screenWakeLockEnabled ? "paused; resumes when page is visible" : "off")}`;
+    screenWakeLockStatus.className = `status-item ${screenWakeLockError ? "status-tx-warning" : active ? "status-tx-normal" : ""}`;
+  }
+
+  async function requestScreenWakeLock() {
+    if (!screenWakeLockEnabled || screenWakeLockPending || document.visibilityState !== "visible" || (screenWakeLock && !screenWakeLock.released)) return;
+    screenWakeLockPending = true;
+    screenWakeLockError = "";
+    renderScreenWakeLock();
+    try {
+      const lock = await navigator.wakeLock.request("screen");
+      screenWakeLock = lock;
+      lock.addEventListener("release", () => {
+        if (screenWakeLock !== lock) return;
+        screenWakeLock = null;
+        renderScreenWakeLock();
+      });
+    } catch (error) {
+      screenWakeLockEnabled = false;
+      screenWakeLockError = `request failed: ${error.message}`;
+    } finally {
+      screenWakeLockPending = false;
+      renderScreenWakeLock();
+    }
+  }
+
+  async function toggleScreenWakeLock() {
+    if (screenWakeLockPending || !navigator.wakeLock?.request) return;
+    screenWakeLockError = "";
+    if (!screenWakeLockEnabled) {
+      screenWakeLockEnabled = true;
+      renderScreenWakeLock();
+      await requestScreenWakeLock();
+      return;
+    }
+    screenWakeLockEnabled = false;
+    screenWakeLockPending = true;
+    renderScreenWakeLock();
+    try {
+      if (screenWakeLock && !screenWakeLock.released) await screenWakeLock.release();
+      screenWakeLock = null;
+    } catch (error) {
+      screenWakeLockEnabled = Boolean(screenWakeLock && !screenWakeLock.released);
+      screenWakeLockError = `release failed: ${error.message}`;
+    } finally {
+      screenWakeLockPending = false;
+      renderScreenWakeLock();
+    }
   }
 
   function gnssThreatPresentation(kind, value, enabled = true) {

@@ -36,6 +36,7 @@
       <span id="heading-status" class="status-item status-metric" title="Heading of motion" aria-label="Heading of motion"><span class="material-symbols-outlined" aria-hidden="true">navigation</span>--</span>
     </div>
     <div id="receiver-status-row" class="status-row" aria-label="Receiver and monitoring status">
+      <span id="screen-wake-lock-status" class="status-item" role="status" aria-live="polite">Screen wake lock: off</span>
       <span id="receiver-interface" class="status-item" role="status">Interface: --</span>
       <span id="receiver-firmware" class="status-item" role="status" title="Receiver firmware and protocol version">FW: --</span>
       <span id="clock-offset" class="status-item">NTP/local clock offset: --</span>
@@ -265,7 +266,13 @@
     <form id="settings-form">
       <div class="settings-head"><h2>Settings</h2><button type="button" id="settings-close" class="secondary" aria-label="Close settings">Close</button></div>
       <div class="settings-body">
-        <fieldset class="integrity-settings">
+        <fieldset class="settings-section">
+          <legend>Display and power</legend>
+          <label class="toggle"><input id="compact-mode" type="checkbox"> Compact mode</label>
+          <label class="toggle"><input id="dark-map" type="checkbox"> Use dark map theme</label>
+          <label class="toggle" title="Keep the screen awake while this page is visible. Does not prevent all system sleep or receiver disconnections."><input id="screen-wake-lock" type="checkbox" aria-describedby="screen-wake-lock-status"> Keep screen awake (applies immediately)</label>
+        </fieldset>
+        <fieldset class="settings-section integrity-settings">
           <legend>GNSS integrity features</legend>
           <label class="toggle"><input id="enable-osnma" type="checkbox" checked> Enable Galileo OSNMA</label>
           <label class="toggle"><input id="enable-has" type="checkbox"> Enable Galileo HAS</label>
@@ -274,21 +281,28 @@
           <p id="strict-osnma-support-note" role="status" hidden>Strict mode is available on the selected X20 receiver only.</p>
           <p id="gnss-integrity-warning" role="status" aria-live="polite" hidden>u-blox HPG 2.10/2.11 release notes state Galileo HAS and OSNMA cannot be enabled together. Selecting both is unsupported and may affect OSNMA authentication.</p>
         </fieldset>
-        <fieldset class="position-source-settings">
+        <fieldset class="settings-section position-source-settings">
           <legend>Position display</legend>
           <label class="setting">Position source<select id="position-source"><option value="NAV">Primary NAV</option><option value="NAV2">Secondary NAV2</option></select></label>
           <p id="position-source-note" role="status" hidden>The F9P uses NAV only. Your saved X20 source preference is retained.</p>
         </fieldset>
-        <label class="toggle"><input id="compact-mode" type="checkbox"> Compact mode</label>
-        <label class="toggle"><input id="show-average" type="checkbox"> Show average trace</label>
-        <label class="setting">Average window (frames)<input id="average-frames" type="number" min="1" max="120" step="1"></label>
-        <label class="toggle"><input id="show-peak" type="checkbox"> Show peak trace</label>
-        <label class="setting">Peak decay (dB per frame)<input id="peak-decay" type="number" min="0" max="30" step="0.1"></label>
-        <label class="toggle"><input id="dark-map" type="checkbox"> Use dark map theme</label>
+        <fieldset class="settings-section">
+          <legend>Spectrum traces</legend>
+          <label class="toggle"><input id="show-average" type="checkbox"> Show average trace</label>
+          <label class="setting">Average window (frames)<input id="average-frames" type="number" min="1" max="120" step="1"></label>
+          <label class="toggle"><input id="show-peak" type="checkbox"> Show peak trace</label>
+          <label class="setting">Peak decay (dB per frame)<input id="peak-decay" type="number" min="0" max="30" step="0.1"></label>
+        </fieldset>
+        <fieldset class="settings-section">
+          <legend>Receiver connection</legend>
         <label class="toggle"><input id="configure-all-interfaces" type="checkbox"> Configure UART1, UART2 and USB</label>
         <label class="setting">Baud rate<select id="receiver-baud"><option value="9600">9 600</option><option value="19200">19 200</option><option value="38400">38 400</option><option value="57600">57 600</option><option value="115200">115 200</option><option value="230400">230 400</option><option value="460800">460 800</option><option value="921600">921 600</option><option value="1000000">1 000 000</option><option value="1500000">1 500 000</option><option value="2000000">2 000 000</option><option value="3000000">3 000 000</option><option value="4000000">4 000 000</option><option value="6000000">6 000 000</option><option value="8000000">8 000 000</option></select></label>
-        <label class="setting">Waterfall duration (minutes)<input id="waterfall-minutes" type="number" min="5" max="30" step="1"></label>
-        <label class="setting">Waterfall timestamp interval (minutes)<input id="waterfall-marker-minutes" type="number" min="1" max="10" step="1"></label>
+        </fieldset>
+        <fieldset class="settings-section">
+          <legend>Waterfall</legend>
+          <label class="setting">Waterfall duration (minutes)<input id="waterfall-minutes" type="number" min="5" max="30" step="1"></label>
+          <label class="setting">Waterfall timestamp interval (minutes)<input id="waterfall-marker-minutes" type="number" min="1" max="10" step="1"></label>
+        </fieldset>
       </div>
       <div class="settings-actions"><button type="button" id="settings-reset" class="secondary">Reset defaults</button><button type="submit">Apply</button></div>
     </form>

@@ -219,9 +219,9 @@ canvas { display: block; width: 100%; background: #090c12; }
 .gnss-threat-indicator[data-state="bad"] { border-left-color: #ff7262; }
 .gnss-threat-indicator[data-state="bad"] strong { color: #ff7262; }
 .gnss-threat-indicator[data-state="off"] strong { color: var(--muted); }
-.integrity-settings, .position-source-settings { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 4px; }
-.integrity-settings legend, .position-source-settings legend { padding: 0 6px; color: var(--text); font-size: 13px; font-weight: 600; }
-.integrity-settings input[type="checkbox"] { width: 15px; height: 15px; accent-color: #59c3c3; }
+.settings-section { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 4px; }
+.settings-section legend { padding: 0 6px; color: var(--text); font-size: 13px; font-weight: 600; }
+#settings-dialog input[type="checkbox"] { flex: 0 0 14px; width: 14px; height: 14px; margin: 0; padding: 0; accent-color: #59c3c3; }
 .integrity-settings p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 #gnss-integrity-warning, #has-coexist-warning { color: #ffd37a; }
 .has-diagnostics { margin: 0 0 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }

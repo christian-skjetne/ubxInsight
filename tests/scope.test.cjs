@@ -32,6 +32,86 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+function wakeLockContext(request) {
+  return loadFunctions(["renderScreenWakeLock", "requestScreenWakeLock", "toggleScreenWakeLock"], {
+    navigator: request ? { wakeLock: { request } } : {},
+    document: { visibilityState: "visible" },
+    screenWakeLock: null, screenWakeLockEnabled: false, screenWakeLockPending: false, screenWakeLockError: "",
+    screenWakeLockToggle: {},
+    screenWakeLockStatus: {},
+  });
+}
+
+test("screen wake lock is opt-in, releases on toggle and reacquires after visibility returns", async () => {
+  const locks = [];
+  const context = wakeLockContext(async (type) => {
+    assert.equal(type, "screen");
+    const lock = {
+      released: false,
+      addEventListener(name, callback) { assert.equal(name, "release"); this.onRelease = callback; },
+      async release() { this.released = true; this.onRelease(); },
+    };
+    locks.push(lock);
+    return lock;
+  });
+  context.renderScreenWakeLock();
+  assert.equal(locks.length, 0);
+  assert.equal(context.screenWakeLockToggle.checked, false);
+  await context.toggleScreenWakeLock();
+  assert.equal(context.screenWakeLockStatus.textContent, "Screen wake lock: active");
+  assert.equal(context.screenWakeLockToggle.checked, true);
+  context.document.visibilityState = "hidden";
+  await locks[0].release();
+  await context.requestScreenWakeLock();
+  assert.equal(locks.length, 1);
+  assert.match(context.screenWakeLockStatus.textContent, /paused/);
+  context.document.visibilityState = "visible";
+  await context.requestScreenWakeLock();
+  assert.equal(locks.length, 2);
+  await context.toggleScreenWakeLock();
+  assert.equal(locks[1].released, true);
+  assert.equal(context.screenWakeLockEnabled, false);
+  assert.equal(context.screenWakeLockToggle.checked, false);
+  assert.equal(context.screenWakeLockStatus.textContent, "Screen wake lock: off");
+});
+
+test("screen wake lock reports unavailable and denied requests without affecting receiver state", async () => {
+  const unavailable = wakeLockContext();
+  unavailable.renderScreenWakeLock();
+  assert.equal(unavailable.screenWakeLockToggle.disabled, true);
+  assert.match(unavailable.screenWakeLockStatus.textContent, /unavailable/);
+  const denied = wakeLockContext(async () => { throw new Error("Permission denied"); });
+  await denied.toggleScreenWakeLock();
+  assert.match(denied.screenWakeLockStatus.textContent, /request failed: Permission denied/);
+  assert.equal(denied.screenWakeLockEnabled, false);
+  assert.equal(denied.screenWakeLockToggle.disabled, false);
+  assert.equal(denied.screenWakeLockToggle.checked, false);
+});
+
+test("screen wake lock prevents concurrent requests and reports release errors", async () => {
+  let resolveRequest;
+  let calls = 0;
+  const context = wakeLockContext(() => {
+    calls++;
+    return new Promise((resolve) => { resolveRequest = resolve; });
+  });
+  const enabling = context.toggleScreenWakeLock();
+  assert.equal(context.screenWakeLockToggle.disabled, true);
+  await context.requestScreenWakeLock();
+  await context.toggleScreenWakeLock();
+  assert.equal(calls, 1);
+  resolveRequest({
+    released: false, addEventListener() {},
+    async release() { throw new Error("Release denied"); },
+  });
+  await enabling;
+  await context.toggleScreenWakeLock();
+  assert.equal(context.screenWakeLockEnabled, true);
+  assert.equal(context.screenWakeLockToggle.disabled, false);
+  assert.equal(context.screenWakeLockToggle.checked, true);
+  assert.match(context.screenWakeLockStatus.textContent, /release failed: Release denied/);
+});
+
 test("SEC-SIGLOG renders documented detection and event types with elapsed seconds", () => {
   const context = loadFunctions(["parseSecSigLog"], {
     secEvents: [],
@@ -509,6 +589,18 @@ test("all signal chart windows advance together despite missing reports and cons
   assert.equal(charts.length, 8);
   assert.ok(charts.every((chart) => chart.options.lastEpoch === 20));
   assert.equal(charts.find((chart) => chart.canvas === "doppler").series.length, 0);
+  for (const name of ["jamState", "spoof"]) {
+    const { options } = charts.find((chart) => chart.canvas === name);
+    assert.equal(options.min, -0.5);
+    assert.equal(options.max, 3.5);
+    assert.deepEqual(Array.from(options.yTicks), [0, 1, 2, 3]);
+  }
+  const secStateOptions = charts.find((chart) => chart.canvas === "secState").options;
+  assert.equal(secStateOptions.min, 0.5);
+  assert.equal(secStateOptions.max, 3.5);
+  assert.deepEqual(Array.from(secStateOptions.yTicks), [1, 2, 3]);
+  assert.equal(charts.find((chart) => chart.canvas === "jamIndex").options.min, 0);
+  assert.equal(charts.find((chart) => chart.canvas === "jamIndex").options.max, 255);
 });
 
 test("NAV epochs advance every graph even when C/N0 and RAWX reports are missing", () => {

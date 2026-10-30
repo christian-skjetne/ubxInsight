@@ -15,11 +15,21 @@ Requires an F9 or X20-series Ublox receiver.
 
 
 ### Ai generated description of app features:
+- Settings are grouped into Display and power, GNSS integrity features, Position
+  display, Spectrum traces, Receiver connection, and Waterfall sections.
 - Serve this directory over localhost, for example: `python -m http.server 8765`
 - Open `index.html` in Chrome or Edge.
 - The page can also be opened directly. In `file://` mode the map automatically
 	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
 - Connect the receiver and select `Start recording` to begin capturing raw bytes.
+- In Settings, check `Keep screen awake` to request a Screen Wake Lock for this page.
+  The status row confirms when it is active or reports a denied request.
+  When returning to a visible tab, an enabled lock is requested again automatically.
+  Uncheck `Keep screen awake` to release it immediately. This opt-in resets on page reload.
+  Support requires a compatible browser and secure context (typically HTTPS or
+  localhost); unavailable browsers disable the checkbox. Browsers may release the
+  lock when hidden or due to power policy. It does not prevent all system sleep,
+  browser suspension, or receiver disconnections.
 - In Settings, enable `Configure UART1, UART2 and USB` and select Apply to
 	configure UBX message output on those three interfaces. This also
 	disables NMEA output on those interfaces; baud rates and input protocols are
