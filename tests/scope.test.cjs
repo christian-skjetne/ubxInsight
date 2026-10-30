@@ -59,7 +59,7 @@ function recordingContext() {
       };
     },
   };
-  const session = { directory, prefix: "test", index: 0, stream: null, saved: 0, queuedBytes: 0, accepting: true, error: null, queue: Promise.resolve(), timer: null, segmentStartedAt: 0, segmentBytes: 0, segments: [] };
+  const session = { directory, prefix: "test", index: 0, stream: null, saved: 0, queuedBytes: 0, accepting: true, error: null, queue: Promise.resolve(), timer: null, segmentStartedAt: 0, segmentBytes: 0, segments: [], configuration: { atStart: [], changes: [] } };
   const context = loadFunctions(["recordChunk", "enqueueRecordingOperation", "openRecordingSegment", "closeRecordingSegment", "stopRecording"], {
     recordingSession: session, recordingStatus: {}, port: {},
     recordButton: { classList: { remove() {} } }, clearInterval() {}, performance: { now: () => 10000 },
@@ -79,7 +79,7 @@ test("segmented recording writes in order and commits each segment independently
   context.recordChunk(new Uint8Array([3, 4]));
   await session.queue;
   assert.deepEqual(saved, [{ name: "test-000002.ubx", bytes: [1, 2] }]);
-  assert.deepEqual(metadata[0], { version: 1, segments: [{ fileName: "test-000002.ubx", sizeBytes: 2, durationMs: 10000 }] });
+  assert.deepEqual(metadata[0], { version: 1, segments: [{ fileName: "test-000002.ubx", sizeBytes: 2, durationMs: 10000 }], configuration: { atStart: [], changes: [] } });
   context.performance.now = () => 12500;
   await context.stopRecording();
   assert.deepEqual(saved[1], { name: "test-000003.ubx", bytes: [3, 4] });
@@ -101,6 +101,22 @@ test("recording reports disk errors and stops accepting data without claiming su
   assert.match(context.recordingStatus.textContent, /Recording failed: Permission revoked/);
   await context.stopRecording();
   assert.match(context.recordingStatus.textContent, /current segment may be lost/);
+});
+
+test("recording stores computer UTC segment starts independently of delayed disk closing", async () => {
+  const { context, session, metadata } = recordingContext();
+  session.startedAt = Date.parse("2026-10-30T18:00:00Z");
+  session.startedMonotonic = 100;
+  session.segmentStartedAt = 100;
+  context.recordChunk(new Uint8Array([1]));
+  await session.queue;
+  await context.closeRecordingSegment(session, 10100);
+  assert.equal(metadata[0].segments[0].startedAt, "2026-10-30T18:00:00.000Z");
+  context.recordChunk(new Uint8Array([2]));
+  await session.queue;
+  await context.closeRecordingSegment(session, 12100);
+  assert.equal(metadata[1].segments[1].startedAt, "2026-10-30T18:00:10.000Z");
+  assert.equal(metadata[1].segments[1].durationMs, 2000);
 });
 
 test("timing metadata failures leave the committed raw segment intact and report failure", async () => {
@@ -153,6 +169,7 @@ test("recording setup validates inputs and starts the chosen segment interval", 
       },
     }) },
     performance: { now: () => 0 },
+    recordingConfigurationSnapshot: () => ({ atStart: [], changes: [] }),
     setInterval(callback, ms) { interval = ms; return 1; },
   });
   await context.beginSegmentedRecording({ preventDefault() {} });
@@ -165,6 +182,46 @@ test("recording setup validates inputs and starts the chosen segment interval", 
   await context.beginSegmentedRecording({ preventDefault() {} });
   assert.equal(context.recordingSession, null);
   assert.match(context.recordingSetupStatus.textContent, /Use a prefix/);
+});
+
+test("configuration metadata snapshots this connection and records subsequent VALSET outcomes", async () => {
+  const context = loadFunctions(["sendValset", "recordingConfigurationSnapshot", "ubxFrame", "checksum"], {
+    receiverConfigurationLog: new Map(), liveConnectionId: 1, receiver: { value: "x20" },
+    recordingSession: null, writer: { async write() {} },
+    waitForValsetAck: async () => "ack",
+  });
+  await context.sendValset("NAV-SAT UART1", 0x20910016, 1, 1);
+  const snapshot = context.recordingConfigurationSnapshot();
+  assert.equal(snapshot.atStart.length, 1);
+  assert.equal(snapshot.atStart[0].key, "0x20910016");
+  assert.equal(snapshot.atStart[0].result, "ack");
+  assert.equal(snapshot.atStart[0].valueBytes, 1);
+  assert.equal(snapshot.atStart[0].layer, "RAM");
+  assert.match(snapshot.atStart[0].requestedAt, /^\d{4}-/);
+  context.recordingSession = { accepting: true, configuration: snapshot };
+  for (const result of ["nak", "timeout"]) {
+    context.waitForValsetAck = async () => result;
+    await context.sendValset("NAV-SAT UART1", 0x20910016, 0, 1);
+  }
+  assert.equal(snapshot.atStart[0].result, "ack", "Initial snapshot must not mutate");
+  assert.deepEqual(Array.from(snapshot.changes, (entry) => entry.result), ["nak", "timeout"]);
+  assert.ok(snapshot.changes.every((entry) => entry.value === 0));
+  context.pendingConfigAcks = [];
+  context.clearTimeout = () => {};
+  context.waitForValsetAck = (name) => new Promise((resolve) => context.pendingConfigAcks.push({ name, resolve }));
+  context.writer.write = async () => { throw new Error("Port closed"); };
+  assert.equal(await context.sendValset("NAV-SAT UART1", 0x20910016, 1, 1), "write failed");
+  assert.equal(snapshot.changes[2].result, "write failed");
+  context.liveConnectionId = 2;
+  assert.equal(context.recordingConfigurationSnapshot().atStart.length, 0, "Previous receiver connection must not leak");
+});
+
+test("recording persists initial configuration and later changes in session JSON", async () => {
+  const { context, session, metadata } = recordingContext();
+  session.configuration = { source: "App-issued requests", atStart: [{ name: "MON-SPAN UART1", value: 1, result: "ack" }], changes: [{ name: "MON-SPAN UART1", value: 0, result: "nak" }] };
+  context.recordChunk(new Uint8Array([1]));
+  await context.stopRecording();
+  assert.deepEqual(metadata[0].configuration, session.configuration);
 });
 
 test("recording creates a new session folder without reusing existing folders", async () => {
@@ -214,6 +271,24 @@ test("replay uses measured per-segment durations across boundaries and when seek
   assert.equal(context.advanceReplayTiming(0, 5000, 300, timing, 999).offset, 300);
   assert.equal(context.advanceReplayTiming(0, 500, 300, [], 100).offset, 50);
   assert.equal(context.advanceReplayTiming(0, 2000, 300, [timing[0], { start: 100, end: 300, durationMs: null }], 100).offset, 200);
+});
+
+test("playback details follow segment boundaries, seeking, duration and unknown timestamps", () => {
+  const context = loadFunctions(["replayPlaybackDetails"], {});
+  const timing = [
+    { start: 0, end: 100, durationMs: 10000, fileName: "first.ubx", startedAt: "2026-10-30T18:00:00Z" },
+    { start: 100, end: 200, durationMs: 20000, fileName: "second.ubx", startedAt: "2026-10-30T18:00:10Z" },
+  ];
+  assert.equal(context.replayPlaybackDetails(timing, 50, 100).duration, "00:00:05 / 00:00:30");
+  const next = context.replayPlaybackDetails(timing, 100, 100);
+  assert.equal(next.currentFile, "2/2: second.ubx");
+  assert.match(next.recordedAt, /2026-10-30 18:00:10.*UTC/);
+  assert.equal(context.replayPlaybackDetails(timing, 200, 100).duration, "00:00:30 / 00:00:30");
+  timing[1].durationMs = null; timing[1].startedAt = null;
+  const legacy = context.replayPlaybackDetails(timing, 150, 100);
+  assert.equal(legacy.duration, "00:00:10 / 00:00:11 (estimated)");
+  assert.match(legacy.recordedAt, /Unknown/);
+  assert.equal(context.replayPlaybackDetails([], 0, 100).currentFile, "--");
 });
 
 test("session manifest times listed segments and recovers unlisted files with fallback", async () => {

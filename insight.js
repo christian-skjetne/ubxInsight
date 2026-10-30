@@ -89,6 +89,9 @@
   const playbackCollapse = document.querySelector("#playback-collapse");
   const playbackClose = document.querySelector("#playback-close");
   const playbackFile = document.querySelector("#playback-file");
+  const playbackCurrentFile = document.querySelector("#playback-current-file");
+  const playbackRecordedAt = document.querySelector("#playback-recorded-at");
+  const playbackDuration = document.querySelector("#playback-duration");
   const playbackScrubber = document.querySelector("#playback-scrubber");
   const playbackPosition = document.querySelector("#playback-position");
   const playbackTotal = document.querySelector("#playback-total");
@@ -193,6 +196,7 @@
   let latestPvtClock = null;
   let latestTimeUtcClock = null;
   let liveConnectionId = 0;
+  const receiverConfigurationLog = new Map();
   let trustedClockSample = null;
   let trustedClockUpdatePending = false;
   const positionEmpty = document.querySelector("#position-empty");
@@ -3174,6 +3178,13 @@
     pending.resolve(messageId === 0x01 ? "ack" : "nak");
   }
   async function sendValset(name, key, value = 1, valueBytes = 1) {
+    const configurationEntry = {
+      name, key: `0x${key.toString(16).padStart(8, "0")}`, value, valueBytes,
+      layer: "RAM", requestedAt: new Date().toISOString(), result: "pending",
+      connectionId: liveConnectionId,
+    };
+    receiverConfigurationLog.set(key, configurationEntry);
+    if (recordingSession?.accepting) recordingSession.configuration.changes.push(configurationEntry);
     const payload = new Uint8Array(8 + valueBytes); const data = new DataView(payload.buffer); payload[1] = 1; data.setUint32(4, key, true);
     if (valueBytes === 1) payload[8] = value;
     else if (valueBytes === 2) data.setUint16(8, value, true);
@@ -3184,7 +3195,8 @@
       const pending = pendingConfigAcks.find((item) => item.name === name);
       if (pending) { clearTimeout(pending.timeout); pendingConfigAcks.splice(pendingConfigAcks.indexOf(pending), 1); pending.resolve("write failed"); }
     }
-    return acknowledgement;
+    configurationEntry.result = await acknowledgement;
+    return configurationEntry.result;
   }
   function showConfigResults(results) {
     const resultLabel = (result) => result === "ack" ? "ACK" : result === "nak" ? "NAK" : result === "timeout" ? "unconfirmed" : result;
@@ -3362,6 +3374,8 @@
         directory, prefix: sessionPrefix, index: 0,
         stream: null, saved: 0, queuedBytes: 0, accepting: true, error: null,
         queue: Promise.resolve(), timer: null, segmentStartedAt: performance.now(), segmentBytes: 0, segmentName: "", segments: [],
+        startedAt: Date.now(), startedMonotonic: performance.now(),
+        configuration: recordingConfigurationSnapshot(),
       };
       recordingSession = session;
       session.timer = setInterval(() => {
@@ -3376,6 +3390,15 @@
     } finally {
       recordingStarting = false; recordingStart.disabled = false; recordingCancel.disabled = false;
     }
+  }
+  function recordingConfigurationSnapshot() {
+    return {
+      source: "App-issued UBX-CFG-VALSET requests; not a receiver configuration readback",
+      scope: "Latest request per key at recording start, plus subsequent requests. ACK confirms acceptance, not independent verification. External changes and pre-existing settings are unknown.",
+      receiver: receiver.value,
+      atStart: [...receiverConfigurationLog.values()].filter((entry) => entry.connectionId === liveConnectionId).map((entry) => ({ ...entry })),
+      changes: [],
+    };
   }
   async function createRecordingDirectory(parent, prefix) {
     for (let suffix = 0; ; suffix++) {
@@ -3392,8 +3415,10 @@
     await session.stream.close();
     session.stream = null;
     session.saved++;
-    session.segments.push({ fileName: session.segmentName, sizeBytes: session.segmentBytes, durationMs: Math.max(1, endedAt - session.segmentStartedAt) });
-    const metadata = { version: 1, segments: session.segments };
+    const segment = { fileName: session.segmentName, sizeBytes: session.segmentBytes, durationMs: Math.max(1, endedAt - session.segmentStartedAt) };
+    if (Number.isFinite(session.startedAt)) segment.startedAt = new Date(session.startedAt + session.segmentStartedAt - session.startedMonotonic).toISOString();
+    session.segments.push(segment);
+    const metadata = { version: 1, segments: session.segments, configuration: session.configuration };
     const handle = await session.directory.getFileHandle("session.json", { create: true });
     const stream = await handle.createWritable();
     try { await stream.write(JSON.stringify(metadata)); await stream.close(); }
@@ -3476,6 +3501,10 @@
   }
   function updatePlaybackControls() {
     const total = replayData?.length || 0;
+    const details = replayPlaybackDetails(replayTiming, replayOffset, Math.max(960, Number(baud.value) || 115200) / 10);
+    playbackCurrentFile.textContent = details.currentFile;
+    playbackRecordedAt.textContent = details.recordedAt;
+    playbackDuration.textContent = details.duration;
     playbackScrubber.max = String(Math.max(total, 1)); playbackScrubber.value = String(Math.min(replayOffset, total));
     playbackPosition.textContent = `${formatBytes(replayOffset)} (${total ? Math.round(replayOffset * 100 / total) : 0}%)`;
     playbackTotal.textContent = formatBytes(total);
@@ -3659,6 +3688,7 @@
     for (const file of sorted) {
       const data = new Uint8Array(await file.arrayBuffer());
       let durationMs = null;
+      let startedAt = null;
       const companions = files.filter((candidate) => candidate.name === `${file.name}.timing.json`);
       const entries = sessionMetadata?.segments.filter((entry) => entry?.fileName === file.name) || [];
       if (entries.length || companions.length === 1) {
@@ -3667,13 +3697,34 @@
           const metadata = entries.length ? entries[0] : JSON.parse(await companions[0].text());
           if ((!entries.length && metadata?.version !== 1) || metadata?.fileName !== file.name || metadata.sizeBytes !== file.size || !Number.isFinite(metadata.durationMs) || metadata.durationMs <= 0) throw new Error("Metadata does not match the recording or has an invalid duration");
           durationMs = metadata.durationMs;
+          if (typeof metadata.startedAt === "string" && Number.isFinite(Date.parse(metadata.startedAt))) startedAt = metadata.startedAt;
         } catch (error) { warnings.push(`${file.name}: ${error.message}`); }
       } else warnings.push(`${file.name}: ${sessionMetadataError || (companions.length ? "ambiguous timing metadata" : "missing timing metadata")}`);
-      timing.push({ start: offset, end: offset + data.length, durationMs });
+      timing.push({ start: offset, end: offset + data.length, durationMs, fileName: file.name, startedAt });
       bytes.set(data, offset); offset += data.length;
     }
     const timingSummary = warnings.length ? `Replay timing: baud-rate estimate for ${warnings.length} file(s). ${warnings.join("; ")}` : "Replay timing: measured average reception rate per segment (not individual packet timing).";
     return { bytes, timing, timingSummary, name: sorted.length === 1 ? sorted[0].name : `${sorted.length} files: ${sorted.map((file) => file.name).join(", ")}` };
+  }
+  function replayPlaybackDetails(timing, offset, fallbackBytesPerSecond) {
+    if (!timing.length) return { currentFile: "--", recordedAt: "Unknown", duration: "--" };
+    const current = timing.find((segment) => segment.end > offset) || timing[timing.length - 1];
+    let totalMs = 0; let elapsedMs = 0;
+    for (const segment of timing) {
+      const size = segment.end - segment.start;
+      const duration = segment.durationMs ?? size / fallbackBytesPerSecond * 1000;
+      totalMs += duration;
+      elapsedMs += size ? duration * Math.max(0, Math.min(1, (offset - segment.start) / size)) : 0;
+    }
+    const format = (ms) => {
+      const seconds = Math.floor(ms / 1000);
+      return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+    };
+    return {
+      currentFile: `${timing.indexOf(current) + 1}/${timing.length}: ${current.fileName}`,
+      recordedAt: current.startedAt ? new Date(current.startedAt).toISOString().replace("T", " ").replace("Z", " UTC") : "Unknown (not recorded in metadata)",
+      duration: `${format(elapsedMs)} / ${format(totalMs)}${timing.some((segment) => segment.durationMs === null) ? " (estimated)" : ""}`,
+    };
   }
   function advanceReplayTiming(offset, remainingMs, total, timing, fallbackBytesPerSecond) {
     const limit = Math.min(total, offset + 262144);

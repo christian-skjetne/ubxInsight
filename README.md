@@ -34,6 +34,16 @@ Requires an F9 or X20-series Ublox receiver.
   It is replaced after each raw segment closes. Keep it with the recording.
   A crash between saving a segment and updating the JSON may leave an unlisted
   segment; folder replay still includes it with a visible baud-rate timing fallback.
+  Session metadata also includes configuration requested by the app: the latest
+  UBX-CFG-VALSET request per key at recording start and requests made during recording.
+  Entries include the setting/message and interface name, hexadecimal key, value,
+  value width, RAM layer, computer UTC request time, and ACK/NAK/timeout/write-failure
+  result. This covers message output rates, output protocols, navigation settings,
+  integrity features and baud settings sent through the same configuration path.
+  It is an app-request log, not a full receiver readback: external changes and
+  pre-existing settings are unknown, and ACK means accepted, not independently verified.
+  Configuration metadata is saved with each completed segment; unsaved updates may
+  be lost in a crash. It is informational and is not applied during replay.
   Each segment is committed when closed; a browser/page crash can lose the current
   unfinished segment (up to the selected duration under normal disk conditions).
   Power loss and stalled writes can still cause data loss. Disk errors or an
@@ -114,6 +124,12 @@ Requires an F9 or X20-series Ublox receiver.
   Renamed recordings need matching filenames in the metadata to retain timing.
   Replay still loads the selected bytes into RAM,
   so very large selections can exceed browser memory.
+  The playback window shows the current segment and file count, elapsed/total
+  recording time, and the current segment's recording start in UTC. New recordings
+  store computer-clock start timestamps in session metadata; older logs show
+  unknown dates rather than file modification times. Durations using baud-rate
+  fallback are marked estimated. Displayed time follows seeking and speed changes;
+  total duration is recording time, not wall-clock time at the chosen replay speed.
 
 The `.ubx` capture contains the raw bytes received from the serial port. It preserves
 message order and content, but not the original host-side timing between serial reads.

@@ -345,6 +345,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 #playback-dialog.collapsed .playback-body { display: none; }
 #playback-dialog.collapsed .playback-head { border-bottom: 0; }
 .playback-body { display: grid; gap: 12px; padding: 16px; }
+.playback-details { display: grid; gap: 6px; margin: 0; font-size: 12px; }
+.playback-details > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px; }
+.playback-details dt { color: var(--muted); }
+.playback-details dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .playback-body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .playback-body input[type="range"] { width: 100%; padding: 0; }
 .playback-progress, .playback-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }

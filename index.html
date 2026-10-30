@@ -254,6 +254,11 @@
       <div id="playback-head" class="settings-head playback-head"><h2>UBX Playback</h2><button type="button" id="playback-collapse" class="secondary icon-button" aria-label="Collapse playback" title="Collapse playback"><span class="material-symbols-outlined" aria-hidden="true">expand_less</span></button><button type="button" id="playback-close" class="secondary icon-button" aria-label="Hide playback" title="Hide playback"><span class="material-symbols-outlined" aria-hidden="true">close</span></button></div>
       <div class="playback-body">
         <strong id="playback-file">No file selected</strong>
+        <dl class="playback-details">
+          <div><dt>Current file</dt><dd id="playback-current-file">--</dd></div>
+          <div><dt>Recorded (UTC)</dt><dd id="playback-recorded-at">Unknown</dd></div>
+          <div><dt>Time / duration</dt><dd id="playback-duration">--</dd></div>
+        </dl>
         <input id="playback-scrubber" type="range" min="0" max="1" value="0" step="1" aria-label="Playback position">
         <div class="playback-progress"><span id="playback-position">0 B</span><span id="playback-total">0 B</span></div>
         <div class="playback-controls">
