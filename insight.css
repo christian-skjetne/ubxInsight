@@ -3,7 +3,11 @@
 body { margin: 0; min-width: 320px; background: #10141c; color: var(--text); font: 14px "Segoe UI", sans-serif; }
 header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--surface); }
 body > header { flex-wrap: wrap; }
-body > header > button { flex-shrink: 0; white-space: nowrap; }
+.toolbar-connection, .toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; width: max-content; max-width: 100%; min-width: 0; }
+.toolbar-connection { flex: 1 1 auto; }
+.toolbar-actions { flex: 0 1 auto; }
+.toolbar-connection > label, .toolbar-actions > button { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 1200px) { .toolbar-connection h1 { display: none; } }
 #receiver-status { display: grid; gap: 0; padding: 0 18px; border-bottom: 1px solid var(--line); background: #121720; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .status-row { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px 20px; padding: 6px 0; }
 #navigation-status-row { border-bottom: 1px solid var(--line); }

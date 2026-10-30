@@ -17,6 +17,8 @@ Requires an F9 or X20-series Ublox receiver.
 ### Ai generated description of app features:
 - Settings are grouped into Display and power, GNSS integrity features, Position
   display, Spectrum traces, Receiver connection, and Waterfall sections.
+- The toolbar hides its heading on narrower screens, then moves the buttons
+  together to a second row. Individual controls wrap only when their group cannot fit.
 - Serve this directory over localhost, for example: `python -m http.server 8765`
 - Open `index.html` in Chrome or Edge.
 - Automatic baud detection can be cancelled with `Cancel`. Once the port is open,
