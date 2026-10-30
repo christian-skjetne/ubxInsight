@@ -19,6 +19,9 @@ Requires an F9 or X20-series Ublox receiver.
   display, Spectrum traces, Receiver connection, and Waterfall sections.
 - Serve this directory over localhost, for example: `python -m http.server 8765`
 - Open `index.html` in Chrome or Edge.
+- Automatic baud detection can be cancelled with `Cancel`. Once the port is open,
+  `Disconnect` remains available during receiver detection and configuration,
+  even if the device sends no valid receiver data.
 - The page can also be opened directly. In `file://` mode the map automatically
 	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
 - Connect the receiver and select `Start recording`. In the setup dialog choose
@@ -49,7 +52,9 @@ Requires an F9 or X20-series Ublox receiver.
   Power loss and stalled writes can still cause data loss. Disk errors or an
   excessive pending-write backlog stop recording and display an explicit warning.
 - In Settings, check `Keep screen awake` to request a Screen Wake Lock for this page.
-  The status row confirms when it is active or reports a denied request.
+  A compact monitor icon in the status row is green when active and yellow on
+  errors; click or tap it to show the current state or denied request.
+  Click outside the popover or press Escape to dismiss it.
   When returning to a visible tab, an enabled lock is requested again automatically.
   Uncheck `Keep screen awake` to release it immediately. This opt-in resets on page reload.
   Support requires a compatible browser and secure context (typically HTTPS or

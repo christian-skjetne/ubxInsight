@@ -63,6 +63,7 @@
   const settingsButton = document.querySelector("#settings");
   const screenWakeLockToggle = document.querySelector("#screen-wake-lock");
   const screenWakeLockStatus = document.querySelector("#screen-wake-lock-status");
+  const screenWakeLockDetails = document.querySelector("#screen-wake-lock-details");
   let screenWakeLock = null;
   let screenWakeLockEnabled = false;
   let screenWakeLockPending = false;
@@ -242,6 +243,7 @@
   const receiver = document.querySelector("#receiver");
   const baud = document.querySelector("#baud");
   let port = null;
+  let connectionAttempt = null;
   let reader = null;
   let writer = null;
   let reading = false;
@@ -1012,7 +1014,10 @@
     const active = Boolean(screenWakeLock && !screenWakeLock.released);
     screenWakeLockToggle.disabled = !supported || screenWakeLockPending;
     screenWakeLockToggle.checked = screenWakeLockEnabled;
-    screenWakeLockStatus.textContent = `Screen wake lock: ${!supported ? "unavailable (requires a supported browser and secure context)" : screenWakeLockError || (screenWakeLockPending ? "updating..." : active ? "active" : screenWakeLockEnabled ? "paused; resumes when page is visible" : "off")}`;
+    const description = `Screen wake lock: ${!supported ? "unavailable (requires a supported browser and secure context)" : screenWakeLockError || (screenWakeLockPending ? "updating..." : active ? "active" : screenWakeLockEnabled ? "paused; resumes when page is visible" : "off")}`;
+    screenWakeLockStatus.title = `${description}. Toggle Keep screen awake in Settings. Helps prevent screen sleep, but cannot guarantee receiver connectivity.`;
+    screenWakeLockDetails.textContent = screenWakeLockStatus.title;
+    screenWakeLockStatus.setAttribute("aria-label", description);
     screenWakeLockStatus.className = `status-item ${screenWakeLockError ? "status-tx-warning" : active ? "status-tx-normal" : ""}`;
   }
 
@@ -3208,7 +3213,8 @@
     configurationStatus.setAttribute("aria-label", hasErrors ? "Configuration has rejected settings" : hasUnconfirmed ? "Configuration has unconfirmed settings" : "Configuration accepted");
     configurationTooltip.innerHTML = `Configuration: ${results.map((item) => `<span class="${resultClass(item.result)}" style="color:${resultColor(item.result)}">${item.name} ${resultLabel(item.result)}</span>`).join(" | ")}`;
   }
-  async function detectReceiverInterface() {
+  async function detectReceiverInterface(signal) {
+    const interfaceWriter = writer;
     interfaceRxState = { counters: new Map(), name: null };
     receiverInterface.textContent = "Interface: detecting...";
     receiverInterface.title = "Polling UBX-MON-COMMS for changes in RX byte counters";
@@ -3216,17 +3222,21 @@
       let settled = false;
       const finish = (name) => {
         if (settled) return;
-        settled = true; clearTimeout(timeout); clearInterval(interval); pendingInterfacePoll = null; resolve(name);
+        settled = true; clearTimeout(timeout); clearInterval(interval); signal?.removeEventListener("abort", cancel); pendingInterfacePoll = null; resolve(name);
       };
+      const cancel = () => finish(null);
       const poll = () => {
-        if (!writer) { finish(null); return; }
-        writer.write(ubxFrame(0x0a, 0x36, new Uint8Array(0))).catch(() => finish(null));
+        if (writer !== interfaceWriter) { finish(null); return; }
+        interfaceWriter.write(ubxFrame(0x0a, 0x36, new Uint8Array(0))).catch(() => finish(null));
       };
       const timeout = setTimeout(() => finish(null), 2000);
       const interval = setInterval(poll, 250);
       pendingInterfacePoll = (name) => { if (name) finish(name); };
-      poll();
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+      else poll();
     });
+    if (signal?.aborted || writer !== interfaceWriter) return null;
     receiverInterface.textContent = interfaceName ? `Interface: ${interfaceName}` : "Interface: unknown (no unique RX activity detected)";
     if (!interfaceName && receiverInterface.title.startsWith("Polling")) receiverInterface.title = "No MON-COMMS response received before timeout";
     return interfaceName;
@@ -3259,8 +3269,9 @@
     return requests;
   }
 
-  async function configureMonSpan() {
+  async function configureMonSpan(signal) {
     if (!writer) return;
+    const configurationWriter = writer;
     configureButton.disabled = true;
     try {
       const requests = [
@@ -3303,7 +3314,11 @@
       );
       configurationStatus.className = "configuration-light config-pending"; configurationStatus.setAttribute("aria-label", "Configuration in progress"); configurationTooltip.textContent = "Configuration: waiting for ACK/NAK responses...";
       const results = [];
-      for (const [name, key, value, valueBytes] of receiverInterfaceRequests(requests, settings.configureAllInterfaces)) results.push({ name, result: await sendValset(name, key, value, valueBytes) });
+      for (const [name, key, value, valueBytes] of receiverInterfaceRequests(requests, settings.configureAllInterfaces)) {
+        if (signal?.aborted || writer !== configurationWriter) return null;
+        results.push({ name, result: await sendValset(name, key, value, valueBytes) });
+      }
+      if (signal?.aborted || writer !== configurationWriter) return null;
       trustedClockSample = null;
       osnmaTrustedTimeStatus.textContent = osnmaClockSettings.useComputerClock
         ? "Trusted-time requirement configured; click Send trusted time to send computer UTC."
@@ -3314,7 +3329,7 @@
       setStatus(`Configuration completed for ${receiver.value.toUpperCase()}; waiting for NAV and monitoring data`);
       return results;
     } catch (error) { setStatus(`Configuration failed: ${error.message}`); return null; }
-    finally { configureButton.disabled = false; refreshLocalClock(); }
+    finally { if (!signal?.aborted && writer === configurationWriter) { configureButton.disabled = false; refreshLocalClock(); } }
   }
 
   async function reconnectAtBaud(rate) {
@@ -3618,7 +3633,7 @@
     playbackCollapse.querySelector(".material-symbols-outlined").textContent = "expand_less"; playbackCollapse.setAttribute("aria-label", "Collapse playback"); playbackCollapse.title = "Collapse playback";
     playbackSpeed.value = "1"; playbackFile.textContent = "No file selected"; updatePlaybackControls();
     resetReplayDerivedViews(); output.replaceChildren(); blockViews = []; empty.hidden = false;
-    connectButton.textContent = "Connect port"; connectButton.disabled = false; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; showPlaybackButton.hidden = true; showPlaybackButton.disabled = false; receiver.disabled = false; baud.disabled = false;
+    connectButton.textContent = "Connect"; connectButton.disabled = false; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; showPlaybackButton.hidden = true; showPlaybackButton.disabled = false; receiver.disabled = false; baud.disabled = false;
     activateTab("spectrum"); setStatus("Waiting for a port");
   }
   function togglePlaybackCollapse() {
@@ -3762,17 +3777,22 @@
     }
     return false;
   }
-  async function probeBaudRate(candidatePort, rate) {
+  async function probeBaudRate(candidatePort, rate, signal) {
     let probeReader = null; let probeWriter = null; let probeBuffer = new Uint8Array(0);
+    const cancelRead = () => { if (probeReader) probeReader.cancel().catch((error) => setStatus(`Probe cancellation failed: ${error.message}`)); };
     try {
+      signal?.throwIfAborted();
       await candidatePort.open({ baudRate: rate, bufferSize: 1 << 20 });
+      signal?.throwIfAborted();
       probeReader = candidatePort.readable.getReader();
+      signal?.addEventListener("abort", cancelRead, { once: true });
       probeWriter = candidatePort.writable.getWriter();
       // MON-VER is a read-only UBX poll. It allows detection even when the firmware
       // has no periodic message output enabled after an upgrade or reset.
       await probeWriter.write(ubxFrame(0x0a, 0x04, new Uint8Array(0)));
       const deadline = Date.now() + 2500;
       while (Date.now() < deadline) {
+        signal?.throwIfAborted();
         const remaining = Math.max(1, deadline - Date.now());
         const result = await Promise.race([probeReader.read(), new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), remaining))]);
         if (result.timeout || result.done) break;
@@ -3780,47 +3800,88 @@
         const merged = new Uint8Array(probeBuffer.length + result.value.length); merged.set(probeBuffer); merged.set(result.value, probeBuffer.length); probeBuffer = merged.slice(-8192);
         if (hasValidUbxFrame(probeBuffer) || hasValidNmeaSentence(probeBuffer)) return true;
       }
+      signal?.throwIfAborted();
       return false;
     } catch (error) {
+      signal?.throwIfAborted();
       // Wrong baud rates can cause Web Serial to reject reads with a framing error.
       // That is an expected probe miss, not a connection failure.
       return false;
     } finally {
+      signal?.removeEventListener("abort", cancelRead);
       if (probeWriter) probeWriter.releaseLock();
       if (probeReader) { await probeReader.cancel().catch(() => {}); probeReader.releaseLock(); }
       if (candidatePort.readable || candidatePort.writable) await candidatePort.close().catch(() => {});
     }
   }
-  async function detectBaudRate(candidatePort) {
+  async function detectBaudRate(candidatePort, signal) {
     const preferred = settings.baudByReceiver[receiver.value] || DEFAULT_SETTINGS.baudByReceiver[receiver.value];
     // Recent X20 firmware commonly returns to 38 400 after an update/reset.
     // Probe it first before an old saved rate can trigger a framing error.
     const firstChoice = receiver.value === "x20" ? 38400 : preferred;
     const candidates = [firstChoice, preferred, ...BAUD_RATES.filter((rate) => rate !== firstChoice && rate !== preferred)];
     for (const rate of candidates) {
+      signal?.throwIfAborted();
       setStatus(`Detecting baud: ${rate.toLocaleString("en-US").replaceAll(",", " ")}`);
-      try { if (await probeBaudRate(candidatePort, rate)) return rate; }
-      catch { /* A port-specific probe failure is treated as a miss. */ }
+      try { if (await probeBaudRate(candidatePort, rate, signal)) return rate; }
+      catch { signal?.throwIfAborted(); /* A port-specific probe failure is treated as a miss. */ }
     }
     throw new Error("No valid UBX data found at the supported baud rates");
   }
   async function connect() {
     if (!("serial" in navigator)) { setStatus("Web Serial requires Chrome or Edge over localhost/HTTPS"); return; }
+    const attempt = new AbortController();
+    connectionAttempt = attempt;
     connectButton.disabled = true;
     try {
       const selectedPort = await navigator.serial.requestPort();
-      const rate = baud.value === "auto" ? await detectBaudRate(selectedPort) : Number(baud.value);
+      attempt.signal.throwIfAborted();
+      connectButton.textContent = "Cancel"; connectButton.disabled = false;
+      receiver.disabled = true; baud.disabled = true; replayButton.disabled = true;
+      const rate = baud.value === "auto" ? await detectBaudRate(selectedPort, attempt.signal) : Number(baud.value);
+      attempt.signal.throwIfAborted();
       await selectedPort.open({ baudRate: rate, bufferSize: 1 << 20 });
+      if (attempt.signal.aborted) { await selectedPort.close(); return; }
       port = selectedPort; writer = port.writable.getWriter(); reading = true;
       resetLiveConnectionState();
       settings.baudByReceiver[receiver.value] = rate; saveSettings(); baud.value = String(rate);
-      connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); pollReceiverFirmware(); await detectReceiverInterface(); await configureMonSpan(); setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
-    } catch (error) { setStatus(`Connection failed: ${error.message}`); }
-    finally { connectButton.disabled = false; }
+      connectButton.textContent = "Disconnect"; configureButton.disabled = true; recordButton.disabled = false; replayButton.disabled = true; showPlaybackButton.hidden = true; receiver.disabled = true; baud.disabled = true; buildBlocks(receiverBlockCount()); readPort(); pollReceiverFirmware();
+      await detectReceiverInterface(attempt.signal);
+      if (attempt.signal.aborted || port !== selectedPort) return;
+      await configureMonSpan(attempt.signal);
+      if (attempt.signal.aborted || port !== selectedPort) return;
+      setStatus(`Connected at ${rate.toLocaleString("en-US").replaceAll(",", " ")}; waiting for UBX data`);
+    } catch (error) { if (!attempt.signal.aborted) setStatus(`Connection failed: ${error.message}`); }
+    finally {
+      if (connectionAttempt === attempt) {
+        connectionAttempt = null; connectButton.disabled = false;
+        if (!port) {
+          connectButton.textContent = "Connect"; receiver.disabled = false; baud.disabled = false; replayButton.disabled = false;
+          if (attempt.signal.aborted) setStatus("Connection cancelled");
+        }
+      }
+    }
   }
-  async function disconnect() { reading = false; resetLocalClock(); resetPositionComparison(); resetSatelliteReports(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect port"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
+  async function disconnect() { reading = false; resetLocalClock(); resetPositionComparison(); resetSatelliteReports(); receiverSystemSample = null; receiverTxSample = null; renderReceiverLoad(); renderReceiverTx(); stopSecSigPolling(); if (receiverFirmwareTimeout !== null) clearTimeout(receiverFirmwareTimeout); receiverFirmwareTimeout = null; if (reader) await reader.cancel(); if (writer) { writer.releaseLock(); writer = null; } if (port) { await port.close(); port = null; } if (isRecording()) await stopRecording(); receiverInterface.textContent = "Interface: --"; receiverFirmware.textContent = "Firmware: --"; receiverFirmware.title = "Receiver firmware and protocol version"; connectButton.textContent = "Connect"; configureButton.disabled = true; recordButton.disabled = true; replayButton.disabled = false; receiver.disabled = false; baud.disabled = false; setStatus("Disconnected"); }
 
-  connectButton.addEventListener("click", () => port ? disconnect() : connect());
+  async function toggleConnection() {
+    const attempt = connectionAttempt;
+    if (attempt) {
+      attempt.abort();
+      connectButton.disabled = true;
+      if (!port) { setStatus("Cancelling connection..."); return; }
+    }
+    if (port) {
+      connectButton.disabled = true;
+      try { await disconnect(); }
+      catch (error) { setStatus(`Disconnect failed: ${error.message}`); }
+      finally {
+        if (connectionAttempt === attempt) connectionAttempt = null;
+        connectButton.disabled = false;
+      }
+    } else await connect();
+  }
+  connectButton.addEventListener("click", toggleConnection);
   recordButton.addEventListener("click", () => isRecording() ? stopRecording() : startRecording());
   replayButton.addEventListener("click", () => replayOpenDialog.showModal());
   showPlaybackButton.addEventListener("click", showPlayback);
@@ -4083,6 +4144,7 @@
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && positionMapDialog.open) setPositionMapExpanded(false);
     if (event.key === "Escape" && systemStatsPanel.matches(":popover-open")) systemStatsPanel.hidePopover();
+    if (event.key === "Escape" && screenWakeLockDetails.matches(":popover-open")) screenWakeLockDetails.hidePopover();
   });
   window.addEventListener("resize", positionSystemStats);
   settingsClose.addEventListener("click", () => settingsDialog.close());

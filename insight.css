@@ -2,14 +2,24 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: #10141c; color: var(--text); font: 14px "Segoe UI", sans-serif; }
 header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--surface); }
+body > header { flex-wrap: wrap; }
+body > header > button { flex-shrink: 0; white-space: nowrap; }
 #receiver-status { display: grid; gap: 0; padding: 0 18px; border-bottom: 1px solid var(--line); background: #121720; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .status-row { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px 20px; padding: 6px 0; }
 #navigation-status-row { border-bottom: 1px solid var(--line); }
 .status-message { display: inline-flex; align-items: center; height: 20px; flex: 0 1 420px; min-width: 180px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .status-item { display: inline-flex; align-items: center; min-height: 20px; white-space: nowrap; line-height: 20px; }
 .status-item[hidden] { display: none; }
+#recording-status:empty { display: none; }
 .status-metric { gap: 8px; }
 .material-symbols-outlined { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; margin-right: 3px; font-size: 16px; line-height: 1; color: #72c7e7; transform: translateY(-1px); }
+.status-metric .material-symbols-outlined { font-size: 16px; line-height: 16px; transform: none; }
+#screen-wake-lock-status { justify-content: center; flex: 0 0 26px; width: 26px; height: 26px; margin-right: -8px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); }
+#screen-wake-lock-status.status-tx-normal { color: #66ff88; }
+#screen-wake-lock-status.status-tx-warning { color: #ffd37a; }
+#screen-wake-lock-status:hover, #screen-wake-lock-status:focus-visible { border-color: currentColor; }
+#screen-wake-lock-details { width: min(360px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; background: #111722; color: var(--text); font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+#screen-wake-lock-status .material-symbols-outlined { margin: 0; font-size: 16px; line-height: 16px; color: inherit; transform: none; }
 .status-no-data { color: var(--muted); }
 .status-authenticated { color: #66ff88; }
 .status-tx-normal { color: #66ff88; }
@@ -355,6 +365,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .playback-controls { flex-wrap: wrap; }
 .playback-actions { display: flex; gap: 7px; }
 .playback-controls button { display: inline-flex; align-items: center; gap: 5px; }
+.playback-controls button .material-symbols-outlined { display: block; flex: 0 0 16px; width: 16px; height: 16px; margin: 0; font-size: 16px; line-height: 16px; transform: none; }
 .playback-controls label { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 800px) { .osnma-overview, .osnma-status-grid, .osnma-auth-grid, .osnma-clock-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 650px) { header { flex-wrap: wrap; } #status { min-width: 0; text-align: left; } .status-row { gap: 4px 12px; } #receiver-status-row #status { flex: 1 1 100%; } #blocks, #position-views, #signal-plots { grid-template-columns: 1fr; } .gnss-threat-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .waterfall { height: 320px; } #position-track, #position-map { height: 340px; } }

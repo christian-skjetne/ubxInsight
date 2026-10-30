@@ -32,6 +32,107 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+function connectionContext() {
+  const statuses = [];
+  const selectedPort = {
+    async open() {}, async close() {},
+    writable: { getWriter: () => ({}) },
+  };
+  const context = loadFunctions(["connect", "toggleConnection"], {
+    AbortController, navigator: { serial: { requestPort: async () => selectedPort } },
+    connectionAttempt: null, port: null, writer: null, reading: false,
+    connectButton: {}, configureButton: {}, recordButton: {}, replayButton: {}, showPlaybackButton: {},
+    receiver: { value: "x20" }, baud: { value: "38400" },
+    settings: { baudByReceiver: {} }, resetLiveConnectionState() {}, saveSettings() {},
+    buildBlocks() {}, receiverBlockCount: () => 3, readPort() {}, pollReceiverFirmware() {},
+    async detectReceiverInterface() {}, async configureMonSpan() {},
+    async disconnect() { context.port = null; context.writer = null; context.reading = false; context.connectButton.textContent = "Connect"; },
+    setStatus(message) { statuses.push(message); },
+  });
+  return { context, selectedPort, statuses };
+}
+
+for (const stage of ["detectReceiverInterface", "configureMonSpan"]) {
+  test(`Disconnect remains enabled during ${stage} without receiver data`, async () => {
+    const { context, statuses } = connectionContext();
+    let finishStage;
+    let reachedStage;
+    const reached = new Promise((resolve) => { reachedStage = resolve; });
+    context[stage] = () => { reachedStage(); return new Promise((resolve) => { finishStage = resolve; }); };
+    const connecting = context.connect();
+    await reached;
+    assert.equal(context.connectButton.textContent, "Disconnect");
+    assert.equal(context.connectButton.disabled, false);
+    await context.toggleConnection();
+    assert.equal(context.port, null);
+    finishStage();
+    await connecting;
+    assert.equal(context.connectButton.textContent, "Connect");
+    assert.equal(context.connectButton.disabled, false);
+    assert.ok(!statuses.some((message) => message.startsWith("Connected at")));
+  });
+}
+
+test("automatic baud detection can be cancelled on a silent port and closes the probe", async () => {
+  const { context, selectedPort, statuses } = connectionContext();
+  let reading;
+  const started = new Promise((resolve) => { reading = resolve; });
+  let finishRead;
+  let closes = 0;
+  let releases = 0;
+  selectedPort.open = async () => {
+    selectedPort.readable = { getReader: () => ({
+      read() { reading(); return new Promise((resolve) => { finishRead = resolve; }); },
+      async cancel() { finishRead?.({ done: true }); },
+      releaseLock() { releases++; },
+    }) };
+  };
+  selectedPort.close = async () => { closes++; selectedPort.readable = null; selectedPort.writable = null; };
+  selectedPort.writable = { getWriter: () => ({ async write() {}, releaseLock() { releases++; } }) };
+  Object.assign(context, {
+    baud: { value: "auto" }, DEFAULT_SETTINGS: { baudByReceiver: { x20: 38400 } },
+    BAUD_RATES: [38400, 115200], Uint8Array, Date, setTimeout, clearTimeout,
+    ubxFrame: () => new Uint8Array(), hasValidUbxFrame: () => false, hasValidNmeaSentence: () => false,
+  });
+  const probing = loadFunctions(["probeBaudRate", "detectBaudRate"], context);
+  context.detectBaudRate = probing.detectBaudRate;
+  const connecting = context.connect();
+  await started;
+  assert.equal(context.connectButton.textContent, "Cancel");
+  assert.equal(context.connectButton.disabled, false);
+  await context.toggleConnection();
+  await connecting;
+  assert.equal(closes, 1);
+  assert.equal(releases, 2);
+  assert.equal(context.port, null);
+  assert.equal(context.connectButton.textContent, "Connect");
+  assert.equal(context.connectButton.disabled, false);
+  assert.equal(context.baud.disabled, false);
+  assert.equal(context.replayButton.disabled, false);
+  assert.equal(statuses.at(-1), "Connection cancelled");
+  assert.ok(!statuses.some((message) => message.startsWith("Connection failed")));
+});
+
+test("cancelling while a serial port opens closes it without starting receiver setup", async () => {
+  const { context, selectedPort } = connectionContext();
+  let finishOpen;
+  let started;
+  let closes = 0;
+  const opening = new Promise((resolve) => { started = resolve; });
+  selectedPort.open = () => { started(); return new Promise((resolve) => { finishOpen = resolve; }); };
+  selectedPort.close = async () => { closes++; };
+  context.detectReceiverInterface = () => assert.fail("Cancelled connection must not start setup");
+  const connecting = context.connect();
+  await opening;
+  await context.toggleConnection();
+  finishOpen();
+  await connecting;
+  assert.equal(closes, 1);
+  assert.equal(context.port, null);
+  assert.equal(context.connectButton.textContent, "Connect");
+  assert.equal(context.connectButton.disabled, false);
+});
+
 function recordingContext() {
   const saved = [];
   const metadata = [];
@@ -335,7 +436,8 @@ function wakeLockContext(request) {
     document: { visibilityState: "visible" },
     screenWakeLock: null, screenWakeLockEnabled: false, screenWakeLockPending: false, screenWakeLockError: "",
     screenWakeLockToggle: {},
-    screenWakeLockStatus: {},
+    screenWakeLockStatus: { setAttribute(name, value) { this[name] = value; } },
+    screenWakeLockDetails: {},
   });
 }
 
@@ -355,13 +457,14 @@ test("screen wake lock is opt-in, releases on toggle and reacquires after visibi
   assert.equal(locks.length, 0);
   assert.equal(context.screenWakeLockToggle.checked, false);
   await context.toggleScreenWakeLock();
-  assert.equal(context.screenWakeLockStatus.textContent, "Screen wake lock: active");
+  assert.equal(context.screenWakeLockStatus["aria-label"], "Screen wake lock: active");
+  assert.match(context.screenWakeLockStatus.title, /Toggle Keep screen awake in Settings/);
   assert.equal(context.screenWakeLockToggle.checked, true);
   context.document.visibilityState = "hidden";
   await locks[0].release();
   await context.requestScreenWakeLock();
   assert.equal(locks.length, 1);
-  assert.match(context.screenWakeLockStatus.textContent, /paused/);
+  assert.match(context.screenWakeLockStatus.title, /paused/);
   context.document.visibilityState = "visible";
   await context.requestScreenWakeLock();
   assert.equal(locks.length, 2);
@@ -369,17 +472,17 @@ test("screen wake lock is opt-in, releases on toggle and reacquires after visibi
   assert.equal(locks[1].released, true);
   assert.equal(context.screenWakeLockEnabled, false);
   assert.equal(context.screenWakeLockToggle.checked, false);
-  assert.equal(context.screenWakeLockStatus.textContent, "Screen wake lock: off");
+  assert.equal(context.screenWakeLockStatus["aria-label"], "Screen wake lock: off");
 });
 
 test("screen wake lock reports unavailable and denied requests without affecting receiver state", async () => {
   const unavailable = wakeLockContext();
   unavailable.renderScreenWakeLock();
   assert.equal(unavailable.screenWakeLockToggle.disabled, true);
-  assert.match(unavailable.screenWakeLockStatus.textContent, /unavailable/);
+  assert.match(unavailable.screenWakeLockStatus.title, /unavailable/);
   const denied = wakeLockContext(async () => { throw new Error("Permission denied"); });
   await denied.toggleScreenWakeLock();
-  assert.match(denied.screenWakeLockStatus.textContent, /request failed: Permission denied/);
+  assert.match(denied.screenWakeLockStatus.title, /request failed: Permission denied/);
   assert.equal(denied.screenWakeLockEnabled, false);
   assert.equal(denied.screenWakeLockToggle.disabled, false);
   assert.equal(denied.screenWakeLockToggle.checked, false);
@@ -406,7 +509,7 @@ test("screen wake lock prevents concurrent requests and reports release errors",
   assert.equal(context.screenWakeLockEnabled, true);
   assert.equal(context.screenWakeLockToggle.disabled, false);
   assert.equal(context.screenWakeLockToggle.checked, true);
-  assert.match(context.screenWakeLockStatus.textContent, /release failed: Release denied/);
+  assert.match(context.screenWakeLockStatus.title, /release failed: Release denied/);
 });
 
 test("SEC-SIGLOG renders documented detection and event types with elapsed seconds", () => {
@@ -2370,6 +2473,23 @@ test("receiver configuration enables NAV-DOP and X20 NAV2-DOP at one epoch per r
   await context.configureMonSpan();
   assert.equal(requests.filter(([name]) => name.includes("NAV2-DOP")).length, 0);
   assert.equal(requests.filter(([name]) => name.startsWith("NAV-DOP ")).length, 3);
+});
+
+test("cancelling initial configuration stops further requests and completion updates", async () => {
+  const attempt = new AbortController();
+  let requests = 0;
+  const context = loadFunctions(["configureMonSpan", "receiverInterfaceRequests", "gnssFeatureConfigurationRequests", "receiverMonitoringConfigurationRequests"], {
+    writer: {}, configureButton: {}, receiver: { value: "x20" },
+    settings: { configureAllInterfaces: true, baudByReceiver: { x20: 38400 } },
+    osnmaClockSettings: { useComputerClock: false }, configurationStatus: { setAttribute() {} }, configurationTooltip: {},
+    setStatus() { assert.fail("Cancelled configuration must not report completion"); },
+    startSecSigPolling() { assert.fail("Cancelled configuration must not start polling"); },
+    refreshLocalClock() { assert.fail("Cancelled configuration must not refresh connection UI"); },
+    async sendValset() { requests++; attempt.abort(); return "timeout"; },
+  });
+  assert.equal(await context.configureMonSpan(attempt.signal), null);
+  assert.equal(requests, 1);
+  assert.equal(context.configureButton.disabled, true);
 });
 
 test("DOP values are scaled and paired by epoch and source regardless of arrival order", () => {
