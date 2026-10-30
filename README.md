@@ -51,7 +51,8 @@ Requires an F9 or X20-series Ublox receiver.
   unfinished segment (up to the selected duration under normal disk conditions).
   Power loss and stalled writes can still cause data loss. Disk errors or an
   excessive pending-write backlog stop recording and display an explicit warning.
-- In Settings, check `Keep screen awake` to request a Screen Wake Lock for this page.
+- Click the screen wake-lock icon and select `Enable wake lock`, or in Settings
+  check `Keep screen awake`, to request a Screen Wake Lock for this page.
   A compact monitor icon in the status row is green when active and yellow on
   errors; click or tap it to show the current state or denied request.
   Click outside the popover or press Escape to dismiss it.

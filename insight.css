@@ -19,6 +19,7 @@ body > header > button { flex-shrink: 0; white-space: nowrap; }
 #screen-wake-lock-status.status-tx-warning { color: #ffd37a; }
 #screen-wake-lock-status:hover, #screen-wake-lock-status:focus-visible { border-color: currentColor; }
 #screen-wake-lock-details { width: min(360px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; background: #111722; color: var(--text); font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+#screen-wake-lock-action { margin-top: 10px; }
 #screen-wake-lock-status .material-symbols-outlined { margin: 0; font-size: 16px; line-height: 16px; color: inherit; transform: none; }
 .status-no-data { color: var(--muted); }
 .status-authenticated { color: #66ff88; }

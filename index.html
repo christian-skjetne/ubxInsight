@@ -40,7 +40,7 @@
       <span id="recording-status" class="status-item" role="status" aria-live="polite"></span>
       <span id="receiver-interface" class="status-item" role="status">Interface: --</span>
       <span id="receiver-firmware" class="status-item" role="status" title="Receiver firmware and protocol version">FW: --</span>
-      <span id="clock-offset" class="status-item">NTP/local clock offset: --</span>
+      <span id="clock-offset" class="status-item" title="NTP/local clock offset">Clock Δ: --</span>
       <span id="status" class="status-message">Waiting for a port</span>
       <button id="system-stats-toggle" class="system-stats-button" type="button" popovertarget="system-stats" aria-label="System stats" aria-expanded="false" title="System stats" data-state="idle"><span class="material-symbols-outlined" aria-hidden="true">monitoring</span></button>
       <span id="configuration-status" class="configuration-light config-pending" tabindex="0" aria-label="Configuration status">
@@ -48,7 +48,11 @@
         <span class="configuration-tooltip" role="tooltip">Configuration: not sent</span>
       </span>
     </div>
-    <div id="screen-wake-lock-details" popover="auto" role="status" aria-live="polite"></div>
+    <div id="screen-wake-lock-details" popover="auto">
+      <div id="screen-wake-lock-description" role="status" aria-live="polite"></div>
+      <button id="screen-wake-lock-action" type="button">Enable wake lock</button>
+      <button type="button" popovertarget="screen-wake-lock-details" popovertargetaction="hide">Close</button>
+    </div>
     <div id="system-stats" popover="auto" role="region" aria-label="Receiver system stats">
       <h2>System Stats</h2>
       <span id="receiver-cpu" class="status-item" title="Receiver CPU load from MON-SYS">CPU: --</span>

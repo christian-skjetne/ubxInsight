@@ -64,11 +64,14 @@
   const screenWakeLockToggle = document.querySelector("#screen-wake-lock");
   const screenWakeLockStatus = document.querySelector("#screen-wake-lock-status");
   const screenWakeLockDetails = document.querySelector("#screen-wake-lock-details");
+  const screenWakeLockDescription = document.querySelector("#screen-wake-lock-description");
+  const screenWakeLockAction = document.querySelector("#screen-wake-lock-action");
   let screenWakeLock = null;
   let screenWakeLockEnabled = false;
   let screenWakeLockPending = false;
   let screenWakeLockError = "";
   screenWakeLockToggle.addEventListener("change", toggleScreenWakeLock);
+  screenWakeLockAction.addEventListener("click", toggleScreenWakeLock);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && screenWakeLockEnabled) requestScreenWakeLock();
   });
@@ -449,7 +452,7 @@
     });
     drawSignals();
     const { width: trackWidth, height: trackHeight } = sizeCanvas(positionTrack); const trackContext = positionTrack.getContext("2d"); trackContext.fillStyle = "#090c12"; trackContext.fillRect(0, 0, trackWidth, trackHeight);
-    fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.className = "status-item"; gpsTime.title = "Authentication status unavailable."; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
+    fixStatus.className = "status-item status-no-data"; fixStatus.textContent = "Fix: no data"; gpsTime.className = "status-item"; gpsTime.title = "Authentication status unavailable."; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "Clock Δ: --"; clockOffset.title = "NTP/local clock offset";
     latitudeStatus.className = "status-item"; latitudeStatus.title = "Position verification status unavailable."; longitudeStatus.className = "status-item"; longitudeStatus.title = "Position verification status unavailable."; altitudeStatus.className = "status-item status-metric"; altitudeStatus.title = "Altitude above mean sea level; position verification status unavailable."; latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --"; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--'; speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--'; headingStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">navigation</span>--';
   }
 
@@ -1015,8 +1018,10 @@
     screenWakeLockToggle.disabled = !supported || screenWakeLockPending;
     screenWakeLockToggle.checked = screenWakeLockEnabled;
     const description = `Screen wake lock: ${!supported ? "unavailable (requires a supported browser and secure context)" : screenWakeLockError || (screenWakeLockPending ? "updating..." : active ? "active" : screenWakeLockEnabled ? "paused; resumes when page is visible" : "off")}`;
-    screenWakeLockStatus.title = `${description}. Toggle Keep screen awake in Settings. Helps prevent screen sleep, but cannot guarantee receiver connectivity.`;
-    screenWakeLockDetails.textContent = screenWakeLockStatus.title;
+    screenWakeLockStatus.title = `${description}. Helps prevent screen sleep, but cannot guarantee receiver connectivity.`;
+    screenWakeLockDescription.textContent = screenWakeLockStatus.title;
+    screenWakeLockAction.disabled = !supported || screenWakeLockPending;
+    screenWakeLockAction.textContent = screenWakeLockEnabled ? "Disable wake lock" : "Enable wake lock";
     screenWakeLockStatus.setAttribute("aria-label", description);
     screenWakeLockStatus.className = `status-item ${screenWakeLockError ? "status-tx-warning" : active ? "status-tx-normal" : ""}`;
   }
@@ -1180,7 +1185,7 @@
     const source = positionSourceForReceiver(receiver.value, settings.positionSource);
     positionFixes = []; positionView = null; positionDrag = null; latestReceiverUtc = null;
     fixStatus.className = "status-item status-no-data"; fixStatus.textContent = `Fix: waiting for ${source}`;
-    gpsTime.className = "status-item"; gpsTime.title = "Authentication status unavailable."; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "NTP/local clock offset: --";
+    gpsTime.className = "status-item"; gpsTime.title = "Authentication status unavailable."; gpsTime.textContent = "GPS UTC: --"; clockOffset.textContent = "Clock Δ: --"; clockOffset.title = "NTP/local clock offset";
     latitudeStatus.className = "status-item"; latitudeStatus.title = "Position verification status unavailable."; longitudeStatus.className = "status-item"; longitudeStatus.title = "Position verification status unavailable."; latitudeStatus.textContent = "Lat: --"; longitudeStatus.textContent = "Lon: --";
     altitudeStatus.className = "status-item status-metric"; altitudeStatus.title = "Altitude above mean sea level; position verification status unavailable."; altitudeStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">terrain</span>--';
     speedStatus.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">speed</span>--';
@@ -1591,8 +1596,9 @@
       else latestReceiverUtc = null;
       const offsetMilliseconds = Date.now() + appClockOffsetMs - receiverUtc;
       const sign = offsetMilliseconds >= 0 ? "+" : "-";
-      clockOffset.textContent = `${appClockOffsetMs ? "App" : "NTP/local"} clock offset: ${sign}${(Math.abs(offsetMilliseconds) / 1000).toFixed(3)} s`;
-    } else { latestReceiverUtc = null; clockOffset.textContent = "NTP/local clock offset: unavailable"; }
+      clockOffset.textContent = `Clock Δ: ${sign}${(Math.abs(offsetMilliseconds) / 1000).toFixed(3)} s`;
+      clockOffset.title = `${appClockOffsetMs ? "App" : "NTP/local"} clock offset`;
+    } else { latestReceiverUtc = null; clockOffset.textContent = "Clock Δ: unavailable"; clockOffset.title = "NTP/local clock offset"; }
     const positionVerified = Boolean(fix.positionValid && fix.nmaFixStatus);
     const locationClass = `status-item${positionVerified ? " status-authenticated" : ""}`;
     const locationTitle = positionVerified ? "Verified: the receiver reports the mixed solution agrees with NMA-authenticated data (NAV-PVT nmaFixStatus=1)." : fix.nmaFixStatus ? "The receiver reports a verified solution, but this position is invalid; it is not highlighted." : "Not shown as verified. A clear or unavailable nmaFixStatus does not imply spoofing; refer to SEC-SIG alerts.";
@@ -2529,14 +2535,16 @@
     if (!result.accepted) { setStatus(`App time unchanged: adjusted trusted UTC was not acknowledged (${result.message || `MGA info ${result.infoCode}`}); send receiver configuration before retrying`); return; }
     appClockOffsetMs = correctedOffsetMs;
     refreshLocalClock();
-    clockOffset.textContent = "App clock offset: waiting for next NAV-PVT";
+    clockOffset.textContent = "Clock Δ: waiting for next NAV-PVT";
+    clockOffset.title = "App clock offset";
     setStatus("OSNMA offset added to app UTC and adjusted trusted UTC accepted; waiting for a new time-sync check. Windows clock unchanged");
   }
   function resetLocalClock() {
     liveConnectionId += 1; latestReceiverUtc = null; appClockOffsetMs = 0;
     trustedClockSample = null; latestAuthenticatedTimeCheck = null; lastAppliedAuthenticatedTimeCheck = null;
     latestPvtClock = null; latestTimeUtcClock = null; refreshOsnmaClock();
-    clockOffset.textContent = "NTP/local clock offset: --";
+    clockOffset.textContent = "Clock Δ: --";
+    clockOffset.title = "NTP/local clock offset";
     refreshLocalClock();
   }
   function osnmaCodeState(group, code) {

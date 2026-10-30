@@ -437,7 +437,7 @@ function wakeLockContext(request) {
     screenWakeLock: null, screenWakeLockEnabled: false, screenWakeLockPending: false, screenWakeLockError: "",
     screenWakeLockToggle: {},
     screenWakeLockStatus: { setAttribute(name, value) { this[name] = value; } },
-    screenWakeLockDetails: {},
+    screenWakeLockDescription: {}, screenWakeLockAction: {},
   });
 }
 
@@ -456,10 +456,14 @@ test("screen wake lock is opt-in, releases on toggle and reacquires after visibi
   context.renderScreenWakeLock();
   assert.equal(locks.length, 0);
   assert.equal(context.screenWakeLockToggle.checked, false);
+  assert.equal(context.screenWakeLockAction.textContent, "Enable wake lock");
   await context.toggleScreenWakeLock();
   assert.equal(context.screenWakeLockStatus["aria-label"], "Screen wake lock: active");
-  assert.match(context.screenWakeLockStatus.title, /Toggle Keep screen awake in Settings/);
+  assert.doesNotMatch(context.screenWakeLockStatus.title, /in Settings/);
+  assert.match(context.screenWakeLockStatus.title, /Helps prevent screen sleep/);
   assert.equal(context.screenWakeLockToggle.checked, true);
+  assert.equal(context.screenWakeLockAction.textContent, "Disable wake lock");
+  assert.equal(context.screenWakeLockDescription.textContent, context.screenWakeLockStatus.title);
   context.document.visibilityState = "hidden";
   await locks[0].release();
   await context.requestScreenWakeLock();
@@ -479,6 +483,7 @@ test("screen wake lock reports unavailable and denied requests without affecting
   const unavailable = wakeLockContext();
   unavailable.renderScreenWakeLock();
   assert.equal(unavailable.screenWakeLockToggle.disabled, true);
+  assert.equal(unavailable.screenWakeLockAction.disabled, true);
   assert.match(unavailable.screenWakeLockStatus.title, /unavailable/);
   const denied = wakeLockContext(async () => { throw new Error("Permission denied"); });
   await denied.toggleScreenWakeLock();
@@ -486,6 +491,8 @@ test("screen wake lock reports unavailable and denied requests without affecting
   assert.equal(denied.screenWakeLockEnabled, false);
   assert.equal(denied.screenWakeLockToggle.disabled, false);
   assert.equal(denied.screenWakeLockToggle.checked, false);
+  assert.equal(denied.screenWakeLockAction.textContent, "Enable wake lock");
+  assert.equal(denied.screenWakeLockAction.disabled, false);
 });
 
 test("screen wake lock prevents concurrent requests and reports release errors", async () => {
@@ -497,6 +504,7 @@ test("screen wake lock prevents concurrent requests and reports release errors",
   });
   const enabling = context.toggleScreenWakeLock();
   assert.equal(context.screenWakeLockToggle.disabled, true);
+  assert.equal(context.screenWakeLockAction.disabled, true);
   await context.requestScreenWakeLock();
   await context.toggleScreenWakeLock();
   assert.equal(calls, 1);
@@ -3064,6 +3072,14 @@ test("UTC capture includes signed nanoseconds and excludes unresolved or replay 
   const fix = { year: 2026, month: 10, day: 15, hour: 10, minute: 30, second: 0, nano: -250000000, valid: 7, fixType: 5, positionValid: false };
   context.updateReceiverStatus(fix);
   assert.equal(context.latestReceiverUtc.utcMs, Date.UTC(2026, 9, 15, 10, 30) - 250);
+  assert.match(context.clockOffset.textContent, /^Clock Δ: [+-][\d.]+ s$/);
+  assert.equal(context.clockOffset.title, "NTP/local clock offset");
+  context.appClockOffsetMs = 1000;
+  context.updateReceiverStatus(fix);
+  assert.equal(context.clockOffset.title, "App clock offset");
+  context.updateReceiverStatus({ ...fix, valid: 0 });
+  assert.equal(context.clockOffset.textContent, "Clock Δ: unavailable");
+  assert.equal(context.clockOffset.title, "NTP/local clock offset");
   context.updateReceiverStatus({ ...fix, valid: 3 });
   assert.equal(context.latestReceiverUtc, null);
   context.replayData = {};
