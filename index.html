@@ -21,7 +21,7 @@
     <button id="connect">Connect port</button>
     <button id="configure" disabled>Send config</button>
     <button id="record" class="secondary" disabled>Start recording</button>
-    <button id="replay" class="secondary">Replay .ubx</button>
+    <button id="replay" class="secondary" title="Open a recording folder, or select .ubx segments and session.json together for measured replay timing. Legacy timing companions are also supported.">Replay .ubx</button>
     <button id="show-playback" class="secondary" hidden>Show playback</button>
     <button id="settings" class="secondary" aria-haspopup="dialog">Settings</button>
   </header>
@@ -37,6 +37,7 @@
     </div>
     <div id="receiver-status-row" class="status-row" aria-label="Receiver and monitoring status">
       <span id="screen-wake-lock-status" class="status-item" role="status" aria-live="polite">Screen wake lock: off</span>
+      <span id="recording-status" class="status-item" role="status" aria-live="polite"></span>
       <span id="receiver-interface" class="status-item" role="status">Interface: --</span>
       <span id="receiver-firmware" class="status-item" role="status" title="Receiver firmware and protocol version">FW: --</span>
       <span id="clock-offset" class="status-item">NTP/local clock offset: --</span>
@@ -260,6 +261,26 @@
           <label>Speed <select id="playback-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option></select></label>
         </div>
       </div>
+    </div>
+  </dialog>
+  <dialog id="recording-dialog">
+    <form id="recording-form">
+      <div class="settings-head"><h2>Start recording</h2><button id="recording-cancel" class="secondary" type="button">Cancel</button></div>
+      <div class="settings-body">
+        <label class="setting">File prefix<input id="recording-prefix" type="text" value="ubx" maxlength="80" required pattern="[A-Za-z0-9_\-]+"></label>
+        <label class="setting">Segment duration (minutes)<input id="recording-minutes" type="number" value="10" min="0.1" max="1440" step="0.1" required></label>
+        <p>Choose a parent folder next. A new prefix-and-timestamp subfolder will hold this recording and one session.json timing file. Completed segments are saved to disk; a crash may lose the current unfinished segment. Open the recording folder for replay, or select individual files.</p>
+        <p id="recording-setup-status" role="status" aria-live="polite"></p>
+      </div>
+      <div class="settings-actions"><button id="recording-start" type="submit">Choose parent folder and start</button></div>
+    </form>
+  </dialog>
+  <dialog id="replay-open-dialog">
+    <div class="settings-head"><h2>Open recording</h2><button id="replay-open-cancel" class="secondary" type="button">Cancel</button></div>
+    <div class="settings-body">
+      <button id="replay-open-folder" type="button">Open recording folder</button>
+      <button id="replay-open-files" class="secondary" type="button">Open individual files</button>
+      <p>Folder replay includes all .ubx segments and session.json in that folder, in numeric filename order. Legacy timing companions are also supported. For individual files, select the logs and session.json together. Subfolders are not included.</p>
     </div>
   </dialog>
   <dialog id="settings-dialog">

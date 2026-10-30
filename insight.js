@@ -55,6 +55,10 @@
   const configureButton = document.querySelector("#configure");
   const recordButton = document.querySelector("#record");
   const replayButton = document.querySelector("#replay");
+  const replayOpenDialog = document.querySelector("#replay-open-dialog");
+  document.querySelector("#replay-open-cancel").addEventListener("click", () => replayOpenDialog.close());
+  document.querySelector("#replay-open-folder").addEventListener("click", () => { replayOpenDialog.close(); replayFolder(); });
+  document.querySelector("#replay-open-files").addEventListener("click", () => { replayOpenDialog.close(); replayFile(); });
   const showPlaybackButton = document.querySelector("#show-playback");
   const settingsButton = document.querySelector("#settings");
   const screenWakeLockToggle = document.querySelector("#screen-wake-lock");
@@ -237,16 +241,27 @@
   let reader = null;
   let writer = null;
   let reading = false;
-  let recordingActive = false;
-  let recordingChunks = null;
-  let recordingName = null;
+  let recordingSession = null;
+  let recordingStarting = false;
+  const recordingDialog = document.querySelector("#recording-dialog");
+  const recordingForm = document.querySelector("#recording-form");
+  const recordingPrefix = document.querySelector("#recording-prefix");
+  const recordingMinutes = document.querySelector("#recording-minutes");
+  const recordingSetupStatus = document.querySelector("#recording-setup-status");
+  const recordingStatus = document.querySelector("#recording-status");
+  const recordingStart = document.querySelector("#recording-start");
+  const recordingCancel = document.querySelector("#recording-cancel");
+  recordingCancel.addEventListener("click", () => recordingDialog.close());
+  recordingDialog.addEventListener("cancel", (event) => { if (recordingStarting) event.preventDefault(); });
+  recordingForm.addEventListener("submit", beginSegmentedRecording);
   let replayData = null;
+  let replayTiming = [];
   let replayName = "";
   let replayOffset = 0;
   let replayPlaying = false;
   let replayAnimationFrame = null;
   let replayLastTimestamp = null;
-  let replayByteBudget = 0;
+  let replayTimeBudget = 0;
   let replayFrames = [];
   let replaySeekAnimationFrame = null;
   let replayRebuilding = false;
@@ -3320,29 +3335,138 @@
   }
 
   function defaultLogName() { return `ubx-${new Date().toISOString().replaceAll(":", "-").replace("T", "_").slice(0, 19)}.ubx`; }
-  function isRecording() { return recordingActive; }
+  function isRecording() { return Boolean(recordingSession); }
   function startRecording() {
     if (!port || isRecording()) return;
-    recordingActive = true; recordingChunks = []; recordingName = defaultLogName();
-    recordButton.textContent = "Stop recording"; recordButton.classList.add("recording");
-    setStatus(`Recording incoming data; ${recordingName} will download when stopped`);
+    if (!window.showDirectoryPicker) { setStatus("Segmented recording requires folder access in Chrome or Edge over localhost/HTTPS"); return; }
+    recordingSetupStatus.textContent = "";
+    recordingDialog.showModal();
+  }
+  async function beginSegmentedRecording(event) {
+    event.preventDefault();
+    if (recordingStarting || !port || isRecording()) return;
+    const prefix = recordingPrefix.value.trim();
+    const minutes = Number(recordingMinutes.value);
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(prefix) || !Number.isFinite(minutes) || minutes < 0.1 || minutes > 1440) {
+      recordingSetupStatus.textContent = "Use a prefix of letters, digits, hyphens or underscores and a duration between 0.1 and 1440 minutes.";
+      return;
+    }
+    recordingStarting = true; recordingStart.disabled = true; recordingCancel.disabled = true;
+    try {
+      const parent = await window.showDirectoryPicker({ mode: "readwrite" });
+      if (!port) throw new Error("Receiver disconnected before recording started");
+      const sessionPrefix = `${prefix}-${defaultLogName().slice(4, -4)}`;
+      const directory = await createRecordingDirectory(parent, sessionPrefix);
+      if (!port) throw new Error("Receiver disconnected before recording started");
+      const session = {
+        directory, prefix: sessionPrefix, index: 0,
+        stream: null, saved: 0, queuedBytes: 0, accepting: true, error: null,
+        queue: Promise.resolve(), timer: null, segmentStartedAt: performance.now(), segmentBytes: 0, segmentName: "", segments: [],
+      };
+      recordingSession = session;
+      session.timer = setInterval(() => {
+        const endedAt = performance.now();
+        enqueueRecordingOperation(session, () => closeRecordingSegment(session, endedAt));
+      }, minutes * 60000);
+      recordButton.textContent = "Stop recording"; recordButton.classList.add("recording");
+      recordingStatus.textContent = `Recording: 0 segments saved; ${minutes} min segments`;
+      recordingDialog.close();
+    } catch (error) {
+      recordingSetupStatus.textContent = error.name === "AbortError" ? "Folder selection cancelled; recording has not started." : `Could not start recording: ${error.message}`;
+    } finally {
+      recordingStarting = false; recordingStart.disabled = false; recordingCancel.disabled = false;
+    }
+  }
+  async function createRecordingDirectory(parent, prefix) {
+    for (let suffix = 0; ; suffix++) {
+      const name = suffix ? `${prefix}-${suffix}` : prefix;
+      try { await parent.getDirectoryHandle(name); }
+      catch (error) {
+        if (error.name !== "NotFoundError") throw error;
+        return parent.getDirectoryHandle(name, { create: true });
+      }
+    }
+  }
+  async function closeRecordingSegment(session, endedAt = performance.now()) {
+    if (!session.stream) { session.segmentStartedAt = endedAt; return; }
+    await session.stream.close();
+    session.stream = null;
+    session.saved++;
+    session.segments.push({ fileName: session.segmentName, sizeBytes: session.segmentBytes, durationMs: Math.max(1, endedAt - session.segmentStartedAt) });
+    const metadata = { version: 1, segments: session.segments };
+    const handle = await session.directory.getFileHandle("session.json", { create: true });
+    const stream = await handle.createWritable();
+    try { await stream.write(JSON.stringify(metadata)); await stream.close(); }
+    catch (error) {
+      try { await stream.abort(); }
+      catch (abortError) { throw new Error(`Timing metadata failed: ${error.message}; cleanup failed: ${abortError.message}`); }
+      throw new Error(`Timing metadata failed: ${error.message}`);
+    }
+    session.segmentStartedAt = endedAt;
+    session.segmentBytes = 0;
+    recordingStatus.textContent = `Recording: ${session.saved} segments saved`;
+  }
+  async function openRecordingSegment(session) {
+    while (true) {
+      const name = `${session.prefix}-${String(++session.index).padStart(6, "0")}.ubx`;
+      try {
+        await session.directory.getFileHandle(name);
+      } catch (error) {
+        if (error.name !== "NotFoundError") throw error;
+        const handle = await session.directory.getFileHandle(name, { create: true });
+        session.stream = await handle.createWritable();
+        session.segmentName = name;
+        return;
+      }
+    }
+  }
+  function enqueueRecordingOperation(session, operation) {
+    session.queue = session.queue.then(async () => {
+      if (!session.error) await operation();
+    }).catch(async (error) => {
+      session.error = error;
+      session.accepting = false;
+      clearInterval(session.timer);
+      recordingStatus.textContent = `Recording failed: ${error.message}. ${session.saved} completed segments saved; current segment may be lost.`;
+      recordButton.textContent = "Finish recording"; recordButton.classList.remove("recording");
+      if (session.stream) {
+        try { await session.stream.abort(); }
+        catch (abortError) { recordingStatus.textContent += ` Cleanup failed: ${abortError.message}`; }
+        session.stream = null;
+      }
+    });
   }
   function recordChunk(chunk) {
-    if (!recordingActive) return;
-    recordingChunks.push(chunk.slice());
+    const session = recordingSession;
+    if (!session?.accepting) return;
+    if (session.queuedBytes + chunk.byteLength > 16 * 1024 * 1024) {
+      session.accepting = false;
+      enqueueRecordingOperation(session, async () => {
+        await closeRecordingSegment(session);
+        throw new Error("Disk writes could not keep up with incoming receiver data");
+      });
+      return;
+    }
+    const bytes = chunk.slice();
+    session.queuedBytes += bytes.byteLength;
+    enqueueRecordingOperation(session, async () => {
+      try {
+        if (!session.stream) await openRecordingSegment(session);
+        await session.stream.write(bytes);
+        session.segmentBytes += bytes.byteLength;
+      } finally { session.queuedBytes -= bytes.byteLength; }
+    });
   }
   async function stopRecording() {
-    if (!isRecording()) return;
-    const chunks = recordingChunks; const fileName = recordingName || defaultLogName();
-    recordingActive = false; recordingChunks = null; recordingName = null; recordButton.textContent = "Start recording"; recordButton.classList.remove("recording"); recordButton.disabled = true;
-    try {
-      const url = URL.createObjectURL(new Blob(chunks, { type: "application/octet-stream" }));
-      const download = document.createElement("a"); download.href = url; download.download = fileName; download.hidden = true;
-      document.body.append(download); download.click(); download.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus(`Recording saved as ${fileName}`);
-    } catch (error) { setStatus(`Could not save recording: ${error.message}`); }
-    finally { recordButton.disabled = !port; }
+    const session = recordingSession;
+    if (!session) return;
+    session.accepting = false; clearInterval(session.timer); recordButton.disabled = true;
+    const endedAt = performance.now();
+    enqueueRecordingOperation(session, () => closeRecordingSegment(session, endedAt));
+    await session.queue;
+    if (!session.error) recordingStatus.textContent = `Recording stopped: ${session.saved} segments saved in ${session.directory.name}`;
+    recordingSession = null;
+    recordButton.textContent = "Start recording"; recordButton.classList.remove("recording"); recordButton.disabled = !port;
   }
   async function readPort() { while (port && port.readable && reading) { reader = port.readable.getReader(); try { while (reading) { const { value, done } = await reader.read(); if (done) break; if (value) { recordChunk(value); appendData(value); } } } catch (error) { if (reading) setStatus(`Port read failed: ${error.message}`); } finally { reader.releaseLock(); reader = null; } } }
   function formatBytes(value) {
@@ -3360,7 +3484,7 @@
     playbackToggle.lastElementChild.textContent = replayPlaying ? "Pause" : "Play";
   }
   function pauseReplay() {
-    replayPlaying = false; replayLastTimestamp = null; replayByteBudget = 0;
+    replayPlaying = false; replayLastTimestamp = null; replayTimeBudget = 0;
     if (replayAnimationFrame !== null) cancelAnimationFrame(replayAnimationFrame);
     replayAnimationFrame = null; updatePlaybackControls();
   }
@@ -3423,11 +3547,12 @@
     if (!replayPlaying || !replayData) return;
     if (replayLastTimestamp === null) replayLastTimestamp = timestamp;
     const elapsed = Math.min(timestamp - replayLastTimestamp, 250); replayLastTimestamp = timestamp;
-    const bytesPerSecond = Math.max(960, Number(baud.value) || 115200) / 10 * Number(playbackSpeed.value);
-    replayByteBudget += bytesPerSecond * elapsed / 1000;
-    const byteCount = Math.min(Math.floor(replayByteBudget), 262144, replayData.length - replayOffset);
+    replayTimeBudget += elapsed * Number(playbackSpeed.value);
+    const advanced = advanceReplayTiming(replayOffset, replayTimeBudget, replayData.length, replayTiming, Math.max(960, Number(baud.value) || 115200) / 10);
+    const byteCount = advanced.offset - replayOffset;
+    replayTimeBudget = advanced.remainingMs;
     if (byteCount > 0) {
-      appendData(replayData.subarray(replayOffset, replayOffset + byteCount)); replayOffset += byteCount; replayByteBudget -= byteCount;
+      appendData(replayData.subarray(replayOffset, replayOffset + byteCount)); replayOffset += byteCount;
       updatePlaybackControls();
     }
     if (replayOffset >= replayData.length) {
@@ -3439,8 +3564,8 @@
     if (!replayData || replayPlaying) return;
     if (replayOffset >= replayData.length) { replayOffset = 0; receiveBuffer = new Uint8Array(0); resetReplayDerivedViews(); }
     if (replaySeekAnimationFrame !== null) { cancelAnimationFrame(replaySeekAnimationFrame); rebuildReplayViewsAtOffset(replayOffset); }
-    replayPlaying = true; replayLastTimestamp = null; replayByteBudget = 0; updatePlaybackControls();
-    setStatus(`Replaying ${replayName} at ${playbackSpeed.value}×`); replayAnimationFrame = requestAnimationFrame(replayTick);
+    replayPlaying = true; replayLastTimestamp = null; replayTimeBudget = 0; updatePlaybackControls();
+    setStatus(`Replaying ${replayName} at ${playbackSpeed.value}×. ${playbackFile.title || ""}`); replayAnimationFrame = requestAnimationFrame(replayTick);
   }
   function seekReplay(offset) {
     pauseReplay(); replayOffset = Math.max(0, Math.min(Number(offset), replayData?.length || 0)); receiveBuffer = new Uint8Array(0);
@@ -3458,7 +3583,7 @@
   function endPlayback() {
     pauseReplay();
     if (replaySeekAnimationFrame !== null) cancelAnimationFrame(replaySeekAnimationFrame);
-    replaySeekAnimationFrame = null; replayData = null; replayFrames = []; replayName = ""; replayOffset = 0; receiveBuffer = new Uint8Array(0);
+    replaySeekAnimationFrame = null; replayData = null; replayTiming = []; replayFrames = []; replayName = ""; replayOffset = 0; receiveBuffer = new Uint8Array(0);
     if (playbackDialog.open) playbackDialog.close(); playbackDialog.classList.remove("collapsed");
     playbackDialog.style.removeProperty("left"); playbackDialog.style.removeProperty("right"); playbackDialog.style.removeProperty("top");
     playbackCollapse.querySelector(".material-symbols-outlined").textContent = "expand_less"; playbackCollapse.setAttribute("aria-label", "Collapse playback"); playbackCollapse.title = "Collapse playback";
@@ -3483,12 +3608,84 @@
   async function replayFile() {
     if (!("showOpenFilePicker" in window)) { setStatus("Replay requires Chrome or Edge over localhost/HTTPS"); return; }
     try {
-      const [fileHandle] = await window.showOpenFilePicker({ multiple: false, types: [{ description: "u-blox binary log", accept: { "application/octet-stream": [".ubx"] } }] });
+      const fileHandles = await window.showOpenFilePicker({ multiple: true, types: [{ description: "UBX logs and companion timing JSON (select together)", accept: { "application/octet-stream": [".ubx"], "application/json": [".json"] } }] });
       pauseReplay();
-      const file = await fileHandle.getFile(); resetReplayDerivedViews(false); replayData = new Uint8Array(await file.arrayBuffer()); replayFrames = indexReplayFrames(replayData); replayName = file.name; replayOffset = 0; receiveBuffer = new Uint8Array(0);
+      const files = await Promise.all(fileHandles.map((handle) => handle.getFile()));
+      await openReplayFiles(files);
+    } catch (error) { if (error.name !== "AbortError") setStatus(`Replay failed: ${error.message}`); }
+  }
+  async function replayFolder() {
+    if (!window.showDirectoryPicker) { setStatus("Folder replay requires Chrome or Edge over localhost/HTTPS"); return; }
+    try {
+      const directory = await window.showDirectoryPicker({ mode: "read" });
+      const files = await readRecordingDirectory(directory);
+      pauseReplay();
+      await openReplayFiles(files);
+    } catch (error) { if (error.name !== "AbortError") setStatus(`Folder replay failed: ${error.message}`); }
+  }
+  async function readRecordingDirectory(directory) {
+    const files = [];
+    for await (const entry of directory.values()) {
+      if (entry.kind === "file" && /(?:\.ubx|\.ubx\.timing\.json|^session\.json)$/i.test(entry.name)) files.push(await entry.getFile());
+    }
+    return files;
+  }
+  async function openReplayFiles(files) {
+      const loaded = await loadReplayFiles(files);
+      resetReplayDerivedViews(false); replayData = loaded.bytes; replayTiming = loaded.timing; replayFrames = indexReplayFrames(replayData); replayName = loaded.name; replayOffset = 0; receiveBuffer = new Uint8Array(0);
       playbackFile.textContent = replayName; playbackTotal.textContent = formatBytes(replayData.length); connectButton.disabled = true; receiver.disabled = true; baud.disabled = true;
       buildBlocks(receiverBlockCount()); pauseReplay(); showPlayback();
-    } catch (error) { if (error.name !== "AbortError") setStatus(`Replay failed: ${error.message}`); }
+      playbackFile.title = loaded.timingSummary;
+      setStatus(loaded.timingSummary);
+  }
+  async function loadReplayFiles(files) {
+    const sorted = files.filter((file) => /\.ubx$/i.test(file.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    if (!sorted.length) throw new Error("Select at least one .ubx recording");
+    const total = sorted.reduce((sum, file) => sum + file.size, 0);
+    const bytes = new Uint8Array(total);
+    const timing = [];
+    const warnings = [];
+    let sessionMetadata = null;
+    let sessionMetadataError = "";
+    const manifests = files.filter((file) => file.name === "session.json");
+    if (manifests.length) {
+      try {
+        if (manifests.length !== 1) throw new Error("Ambiguous session.json files");
+        sessionMetadata = JSON.parse(await manifests[0].text());
+        if (sessionMetadata?.version !== 1 || !Array.isArray(sessionMetadata.segments)) throw new Error("Invalid session.json format");
+      } catch (error) { sessionMetadata = null; sessionMetadataError = error.message; }
+    }
+    let offset = 0;
+    for (const file of sorted) {
+      const data = new Uint8Array(await file.arrayBuffer());
+      let durationMs = null;
+      const companions = files.filter((candidate) => candidate.name === `${file.name}.timing.json`);
+      const entries = sessionMetadata?.segments.filter((entry) => entry?.fileName === file.name) || [];
+      if (entries.length || companions.length === 1) {
+        try {
+          if (entries.length > 1) throw new Error("Duplicate segment entries in session.json");
+          const metadata = entries.length ? entries[0] : JSON.parse(await companions[0].text());
+          if ((!entries.length && metadata?.version !== 1) || metadata?.fileName !== file.name || metadata.sizeBytes !== file.size || !Number.isFinite(metadata.durationMs) || metadata.durationMs <= 0) throw new Error("Metadata does not match the recording or has an invalid duration");
+          durationMs = metadata.durationMs;
+        } catch (error) { warnings.push(`${file.name}: ${error.message}`); }
+      } else warnings.push(`${file.name}: ${sessionMetadataError || (companions.length ? "ambiguous timing metadata" : "missing timing metadata")}`);
+      timing.push({ start: offset, end: offset + data.length, durationMs });
+      bytes.set(data, offset); offset += data.length;
+    }
+    const timingSummary = warnings.length ? `Replay timing: baud-rate estimate for ${warnings.length} file(s). ${warnings.join("; ")}` : "Replay timing: measured average reception rate per segment (not individual packet timing).";
+    return { bytes, timing, timingSummary, name: sorted.length === 1 ? sorted[0].name : `${sorted.length} files: ${sorted.map((file) => file.name).join(", ")}` };
+  }
+  function advanceReplayTiming(offset, remainingMs, total, timing, fallbackBytesPerSecond) {
+    const limit = Math.min(total, offset + 262144);
+    while (offset < limit) {
+      const segment = timing.find((item) => item.start <= offset && item.end > offset);
+      const end = Math.min(segment?.end ?? total, limit);
+      const msPerByte = segment?.durationMs ? segment.durationMs / (segment.end - segment.start) : 1000 / fallbackBytesPerSecond;
+      const count = Math.min(end - offset, Math.floor(remainingMs / msPerByte));
+      offset += count; remainingMs = Math.max(0, remainingMs - count * msPerByte);
+      if (offset < end) break;
+    }
+    return { offset, remainingMs };
   }
   function hasValidUbxFrame(bytes) {
     for (let start = 0; start + 7 < bytes.length; start++) {
@@ -3574,7 +3771,7 @@
 
   connectButton.addEventListener("click", () => port ? disconnect() : connect());
   recordButton.addEventListener("click", () => isRecording() ? stopRecording() : startRecording());
-  replayButton.addEventListener("click", replayFile);
+  replayButton.addEventListener("click", () => replayOpenDialog.showModal());
   showPlaybackButton.addEventListener("click", showPlayback);
   playbackToggle.addEventListener("click", () => replayPlaying ? pauseReplay() : playReplay());
   playbackEnd.addEventListener("click", endPlayback);

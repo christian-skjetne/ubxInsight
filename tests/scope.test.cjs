@@ -32,6 +32,228 @@ test("browser script parses", () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+function recordingContext() {
+  const saved = [];
+  const metadata = [];
+  const existing = new Set();
+  const directory = {
+    name: "logs",
+    async getFileHandle(name, options) {
+      if (!options?.create) {
+        if (existing.has(name)) return {};
+        throw Object.assign(new Error("Missing file"), { name: "NotFoundError" });
+      }
+      existing.add(name);
+      return {
+        async createWritable() {
+          const bytes = [];
+          return {
+            async write(chunk) { bytes.push(...chunk); },
+            async close() {
+              if (name.endsWith(".json")) metadata.push(JSON.parse(bytes.join("")));
+              else saved.push({ name, bytes });
+            },
+            async abort() {},
+          };
+        },
+      };
+    },
+  };
+  const session = { directory, prefix: "test", index: 0, stream: null, saved: 0, queuedBytes: 0, accepting: true, error: null, queue: Promise.resolve(), timer: null, segmentStartedAt: 0, segmentBytes: 0, segments: [] };
+  const context = loadFunctions(["recordChunk", "enqueueRecordingOperation", "openRecordingSegment", "closeRecordingSegment", "stopRecording"], {
+    recordingSession: session, recordingStatus: {}, port: {},
+    recordButton: { classList: { remove() {} } }, clearInterval() {}, performance: { now: () => 10000 },
+  });
+  return { context, session, saved, existing, metadata };
+}
+
+test("segmented recording writes in order and commits each segment independently", async () => {
+  const { context, session, saved, existing, metadata } = recordingContext();
+  existing.add("test-000001.ubx");
+  const chunk = new Uint8Array([1, 2]);
+  context.recordChunk(chunk);
+  chunk[0] = 9;
+  await session.queue;
+  assert.equal(saved.length, 0, "Open segment is not yet committed");
+  context.enqueueRecordingOperation(session, () => context.closeRecordingSegment(session));
+  context.recordChunk(new Uint8Array([3, 4]));
+  await session.queue;
+  assert.deepEqual(saved, [{ name: "test-000002.ubx", bytes: [1, 2] }]);
+  assert.deepEqual(metadata[0], { version: 1, segments: [{ fileName: "test-000002.ubx", sizeBytes: 2, durationMs: 10000 }] });
+  context.performance.now = () => 12500;
+  await context.stopRecording();
+  assert.deepEqual(saved[1], { name: "test-000003.ubx", bytes: [3, 4] });
+  assert.equal(metadata[1].segments.length, 2);
+  assert.equal(metadata[1].segments[1].durationMs, 2500);
+  assert.ok(existing.has("session.json"));
+  assert.ok(![...existing].some((name) => name.endsWith(".timing.json")));
+  assert.equal(context.recordingSession, null);
+  assert.equal(session.queuedBytes, 0);
+  assert.match(context.recordingStatus.textContent, /2 segments saved/);
+});
+
+test("recording reports disk errors and stops accepting data without claiming success", async () => {
+  const { context, session } = recordingContext();
+  session.directory.getFileHandle = async () => { throw new Error("Permission revoked"); };
+  context.recordChunk(new Uint8Array([1]));
+  await session.queue;
+  assert.equal(session.accepting, false);
+  assert.match(context.recordingStatus.textContent, /Recording failed: Permission revoked/);
+  await context.stopRecording();
+  assert.match(context.recordingStatus.textContent, /current segment may be lost/);
+});
+
+test("timing metadata failures leave the committed raw segment intact and report failure", async () => {
+  const { context, session, saved } = recordingContext();
+  const getFileHandle = session.directory.getFileHandle;
+  session.directory.getFileHandle = async (name, options) => {
+    if (name.endsWith(".json")) throw new Error("Cannot save timing");
+    return getFileHandle(name, options);
+  };
+  context.recordChunk(new Uint8Array([1, 2]));
+  await context.stopRecording();
+  assert.equal(saved.length, 1);
+  assert.match(context.recordingStatus.textContent, /Recording failed: Cannot save timing/);
+  assert.equal(session.saved, 1);
+});
+
+test("recording bounds the pending write buffer and preserves completed data on overflow", async () => {
+  const { context, session, saved } = recordingContext();
+  context.recordChunk(new Uint8Array([1, 2]));
+  await session.queue;
+  session.queuedBytes = 16 * 1024 * 1024;
+  context.recordChunk(new Uint8Array([3]));
+  await session.queue;
+  assert.equal(session.accepting, false);
+  assert.deepEqual(saved[0].bytes, [1, 2]);
+  assert.match(context.recordingStatus.textContent, /could not keep up/);
+});
+
+test("multiple replay segments sort numerically and restore UBX frames split at boundaries", async () => {
+  const context = loadFunctions(["loadReplayFiles", "indexReplayFrames", "replayFrameGroup", "ubxFrame", "checksum"], {});
+  const frame = context.ubxFrame(0x01, 0x07, new Uint8Array(92));
+  const file = (name, data) => ({ name, size: data.length, arrayBuffer: async () => data.slice().buffer });
+  const loaded = await context.loadReplayFiles([file("log-10.ubx", frame.slice(7)), file("log-2.ubx", frame.slice(0, 7))]);
+  assert.deepEqual(Array.from(loaded.bytes), Array.from(frame));
+  assert.equal(context.indexReplayFrames(loaded.bytes).length, 1);
+  assert.match(loaded.name, /^2 files: log-2.ubx, log-10.ubx$/);
+});
+
+test("recording setup validates inputs and starts the chosen segment interval", async () => {
+  let interval;
+  const context = loadFunctions(["beginSegmentedRecording", "isRecording", "defaultLogName", "createRecordingDirectory"], {
+    port: {}, recordingSession: null, recordingStarting: false,
+    recordingPrefix: { value: "field" }, recordingMinutes: { value: "10" },
+    recordingSetupStatus: {}, recordingStatus: {}, recordingStart: {}, recordingCancel: {},
+    recordingDialog: { close() {} }, recordButton: { classList: { add() {} } },
+    window: { showDirectoryPicker: async () => ({
+      async getDirectoryHandle(name, options) {
+        if (options?.create) return { name };
+        throw Object.assign(new Error("Missing folder"), { name: "NotFoundError" });
+      },
+    }) },
+    performance: { now: () => 0 },
+    setInterval(callback, ms) { interval = ms; return 1; },
+  });
+  await context.beginSegmentedRecording({ preventDefault() {} });
+  assert.equal(interval, 600000);
+  assert.equal(context.recordingSession.accepting, true);
+  assert.match(context.recordingSession.prefix, /^field-/);
+  assert.equal(context.recordingSession.directory.name, context.recordingSession.prefix);
+  context.recordingSession = null;
+  context.recordingPrefix.value = "../invalid";
+  await context.beginSegmentedRecording({ preventDefault() {} });
+  assert.equal(context.recordingSession, null);
+  assert.match(context.recordingSetupStatus.textContent, /Use a prefix/);
+});
+
+test("recording creates a new session folder without reusing existing folders", async () => {
+  const context = loadFunctions(["createRecordingDirectory"], {});
+  const created = [];
+  const parent = {
+    async getDirectoryHandle(name, options) {
+      if (options?.create) { created.push(name); return { name }; }
+      if (name === "field-session") return {};
+      throw Object.assign(new Error("Missing"), { name: "NotFoundError" });
+    },
+  };
+  const directory = await context.createRecordingDirectory(parent, "field-session");
+  assert.equal(directory.name, "field-session-1");
+  assert.deepEqual(created, ["field-session-1"]);
+  await assert.rejects(() => context.createRecordingDirectory({
+    async getDirectoryHandle() { throw new Error("Permission denied"); },
+  }, "field"), /Permission denied/);
+});
+
+test("folder replay reads only direct UBX segments and timing companions", async () => {
+  const context = loadFunctions(["readRecordingDirectory", "loadReplayFiles"], {});
+  const files = [
+    { name: "log-1.ubx", size: 2, arrayBuffer: async () => new Uint8Array([1, 2]).buffer },
+    { name: "log-1.ubx.timing.json", text: async () => JSON.stringify({ version: 1, fileName: "log-1.ubx", sizeBytes: 2, durationMs: 1000 }) },
+  ];
+  const directory = {
+    async *values() {
+      for (const file of files) yield { kind: "file", name: file.name, getFile: async () => file };
+      yield { kind: "directory", name: "nested.ubx" };
+      yield { kind: "file", name: "notes.txt", getFile() { throw new Error("Should not read"); } };
+    },
+  };
+  const selected = await context.readRecordingDirectory(directory);
+  assert.equal(selected.length, 2);
+  const loaded = await context.loadReplayFiles(selected);
+  assert.equal(loaded.timing[0].durationMs, 1000);
+  await assert.rejects(() => context.loadReplayFiles([]), /Select at least one/);
+});
+
+test("replay uses measured per-segment durations across boundaries and when seeking", () => {
+  const context = loadFunctions(["advanceReplayTiming"], {});
+  const timing = [{ start: 0, end: 100, durationMs: 1000 }, { start: 100, end: 300, durationMs: 4000 }];
+  assert.equal(context.advanceReplayTiming(0, 1000, 300, timing, 999).offset, 100);
+  assert.equal(context.advanceReplayTiming(0, 3000, 300, timing, 999).offset, 200);
+  assert.equal(context.advanceReplayTiming(150, 1000, 300, timing, 999).offset, 200);
+  assert.equal(context.advanceReplayTiming(0, 5000, 300, timing, 999).offset, 300);
+  assert.equal(context.advanceReplayTiming(0, 500, 300, [], 100).offset, 50);
+  assert.equal(context.advanceReplayTiming(0, 2000, 300, [timing[0], { start: 100, end: 300, durationMs: null }], 100).offset, 200);
+});
+
+test("session manifest times listed segments and recovers unlisted files with fallback", async () => {
+  const context = loadFunctions(["readRecordingDirectory", "loadReplayFiles"], {});
+  const file = (name) => ({ name, size: 2, arrayBuffer: async () => new Uint8Array([1, 2]).buffer });
+  const segments = [{ fileName: "log-1.ubx", sizeBytes: 2, durationMs: 1500 }];
+  const manifest = { name: "session.json", text: async () => JSON.stringify({ version: 1, segments }) };
+  const files = [file("log-1.ubx"), file("log-2.ubx"), manifest];
+  const directory = { async *values() {
+    for (const entry of files) yield { kind: "file", name: entry.name, getFile: async () => entry };
+  } };
+  const loaded = await context.loadReplayFiles(await context.readRecordingDirectory(directory));
+  assert.equal(loaded.bytes.length, 4);
+  assert.equal(loaded.timing[0].durationMs, 1500);
+  assert.equal(loaded.timing[1].durationMs, null);
+  assert.match(loaded.timingSummary, /log-2.ubx: missing timing metadata/);
+  for (const text of ["{bad", "null", '{"version":99,"segments":[]}', JSON.stringify({ version: 1, segments: [segments[0], segments[0]] }), JSON.stringify({ version: 1, segments: [{ ...segments[0], sizeBytes: 99 }] })]) {
+    const invalid = await context.loadReplayFiles([files[0], { name: "session.json", text: async () => text }]);
+    assert.equal(invalid.timing[0].durationMs, null);
+    assert.match(invalid.timingSummary, /baud-rate estimate/);
+  }
+});
+
+test("replay accepts arbitrary filenames and explicitly falls back for invalid timing companions", async () => {
+  const context = loadFunctions(["loadReplayFiles"], {});
+  const file = { name: "arbitrary recording.ubx", size: 2, arrayBuffer: async () => new Uint8Array([1, 2]).buffer };
+  const companion = (value) => ({ name: `${file.name}.timing.json`, text: async () => value });
+  const good = await context.loadReplayFiles([file, companion(JSON.stringify({ version: 1, fileName: file.name, sizeBytes: 2, durationMs: 1200 }))]);
+  assert.equal(good.timing[0].durationMs, 1200);
+  assert.match(good.timingSummary, /measured average/);
+  for (const json of ["{bad", "null", JSON.stringify({ version: 1, fileName: file.name, sizeBytes: 2, durationMs: 0 }), JSON.stringify({ version: 1, fileName: file.name, sizeBytes: 9, durationMs: 20 })]) {
+    const result = await context.loadReplayFiles([file, companion(json)]);
+    assert.equal(result.timing[0].durationMs, null);
+    assert.match(result.timingSummary, /baud-rate estimate/);
+    assert.deepEqual(Array.from(result.bytes), [1, 2]);
+  }
+  const missing = await context.loadReplayFiles([file]);
+  assert.match(missing.timingSummary, /missing timing metadata/);
+});
+
 function wakeLockContext(request) {
   return loadFunctions(["renderScreenWakeLock", "requestScreenWakeLock", "toggleScreenWakeLock"], {
     navigator: request ? { wakeLock: { request } } : {},

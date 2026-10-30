@@ -21,7 +21,23 @@ Requires an F9 or X20-series Ublox receiver.
 - Open `index.html` in Chrome or Edge.
 - The page can also be opened directly. In `file://` mode the map automatically
 	uses OpenFreeMap because OpenStreetMap's public tile server requires an HTTP referrer.
-- Connect the receiver and select `Start recording` to begin capturing raw bytes.
+- Connect the receiver and select `Start recording`. In the setup dialog choose
+  a file prefix and segment duration (default 10 minutes), then select a destination
+  parent folder. A new prefix-and-timestamp subfolder is created for each recording;
+  if that name already exists, a numbered suffix keeps sessions separate.
+  Folder access requires a supporting browser such as Chrome/Edge in a
+  secure context. Recording starts after folder selection, not while the dialog is open.
+  Incoming raw bytes stream to numbered `.ubx` segments with a session timestamp.
+  Existing segment names are skipped rather than overwritten.
+  One `session.json` lists completed segments with their byte counts and actual
+  elapsed durations measured with the computer's monotonic clock (not receiver UTC).
+  It is replaced after each raw segment closes. Keep it with the recording.
+  A crash between saving a segment and updating the JSON may leave an unlisted
+  segment; folder replay still includes it with a visible baud-rate timing fallback.
+  Each segment is committed when closed; a browser/page crash can lose the current
+  unfinished segment (up to the selected duration under normal disk conditions).
+  Power loss and stalled writes can still cause data loss. Disk errors or an
+  excessive pending-write backlog stop recording and display an explicit warning.
 - In Settings, check `Keep screen awake` to request a Screen Wake Lock for this page.
   The status row confirms when it is active or reports a denied request.
   When returning to a visible tab, an enabled lock is requested again automatically.
@@ -53,7 +69,9 @@ Requires an F9 or X20-series Ublox receiver.
 	`/dev/ttyACM0` commonly represents native receiver USB, not UART1; USB-to-UART
 	adapters instead reach whichever receiver UART they are wired to. The host
 	device name alone does not establish the receiver-side interface.
-- Select `Stop recording` to download the completed `.ubx` file.
+- Select `Stop recording` to finish queued writes and save the last segment.
+  The status row reports the number of completed segments. Files are saved in
+  the chosen folder rather than downloaded at the end.
 - The status bar's system-stats icon opens CPU, memory and serial TX readings.
 	It is yellow when any current percentage exceeds 90%, red above 95%, and
 	green otherwise once telemetry is available. Historical peaks do not trigger
@@ -79,8 +97,23 @@ Requires an F9 or X20-series Ublox receiver.
 	to both UARTs. The interface-status estimate is not used to choose a UART. Native
 	USB has no UART baud limit. UART1/2 TX queue occupancy above 90% displays a
 	persistent status-bar tip to raise the rate in Settings.
-- Select `Replay .ubx` to open the playback controls for play/pause, speed and seeking.
-	The `1x` rate is estimated from the selected receiver baud rate.
+- Select `Replay .ubx`, then `Open recording folder` to automatically load all
+  direct `.ubx` files and `session.json` in a recording's folder (not subfolders).
+  Empty folders report an error. Alternatively choose `Open individual files`
+  and select one or more files to open the playback controls
+  for play/pause, speed and seeking. Multiple files are joined in numeric filename
+  order, including UBX messages split across segment boundaries; select consecutive
+  segments from the same recording and `session.json`. Existing per-segment
+  `.ubx.timing.json` companions remain supported; valid session entries take precedence.
+  Valid metadata makes 1x playback follow each segment's measured average reception
+  rate, including a shortened final segment, rather than estimating from baud rate.
+  This reproduces overall duration, not individual packet bursts or pauses.
+  Arbitrary/legacy `.ubx` filenames work without timing metadata. Missing, malformed,
+  mismatched, or non-positive durations fall back to the baud-rate estimate for that
+  file, with an explicit timing notice in the status row and playback filename tooltip.
+  Renamed recordings need matching filenames in the metadata to retain timing.
+  Replay still loads the selected bytes into RAM,
+  so very large selections can exceed browser memory.
 
 The `.ubx` capture contains the raw bytes received from the serial port. It preserves
 message order and content, but not the original host-side timing between serial reads.
