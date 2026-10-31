@@ -8,7 +8,13 @@ Requires an F9 or X20-series Ublox receiver.
 ## Browser app:
 - Try it out here: https://christian-skjetne.github.io/ubxInsight/
 - or just clone and open the index.html file in the browser. No server needed.
-## useful info:
+- You need a browser that supports web serial. Chrome and Edge should work fine. 
+
+## Android:
+https://github.com/christian-skjetne/AndroidWebSerialApp
+<br>If you want to use this on an Android device you can't use the regualar Android chrome web browser since that does not support serial devices. You can use this project that opens a web view that bridges the native USB host support in Android to a web viewer. It should support all features of this project including recording and playback of ubx files.
+
+## Useful info:
 - This web app gets a lot of data from your receiver, you need to set the baudrate very high (I suggest 1M or 2M minimum)
 - The baudrate should be set on both uart1 and uart2. If one of them is bogged down it effect the other for some reason.
 - You can set the baudrate in RAM from the settings button. If you unplug the unit you need to do it again.
