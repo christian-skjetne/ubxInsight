@@ -231,7 +231,11 @@ Browser regression checks (Node.js): `node --test tests/scope.test.cjs`
 ### NAV/NAV2 position comparison:
 - On X20, the Position tab compares NAV-PVT and NAV2-PVT at identical `iTOW`
 	epochs, independently of the selected track/map source. Up to 60 epochs are
-	buffered to accommodate delayed output; older arrivals do not replace newer pairs.
+	buffered to accommodate delayed output; older arrivals within 60 seconds do not
+	replace newer pairs. Larger backward time-of-week corrections rebase the shared
+	position cache so cold starts recover without reloading. GPS-week rollover is
+	handled without resetting the cache. Time corrections when receiver UTC first
+	becomes fully resolved also start fresh comparison epochs.
 - Horizontal separation uses local WGS84 geometry (a spherical surface-distance
 	approximation for separations over 100 km). Signed vertical difference is NAV2
 	minus NAV ellipsoid height, and requires valid 3D fixes from both streams.

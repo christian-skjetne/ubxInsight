@@ -1451,7 +1451,18 @@
     if (iTow >= 604800000) return;
     const latitude = data.getInt32(28, true) / 1e7; const longitude = data.getInt32(24, true) / 1e7;
     const fixType = payload[20]; const flags = payload[21];
-    const sample = { iTow, latitude, longitude, height: data.getInt32(32, true) / 1000, hAcc: data.getUint32(40, true) / 1000, vAcc: data.getUint32(44, true) / 1000, fixType, flags, satellites: payload[23], receivedAt: Date.now(), positionValid: Boolean(flags & 1) && [2, 3, 4].includes(fixType) && !(payload[78] & 1) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 };
+    const previous = positionComparisonState.latest[source];
+    const towDelta = previous ? ((iTow - previous.iTow + 907200000) % 604800000) - 302400000 : 0;
+    const timeResolved = (payload[11] & 7) === 7;
+    // Cold-start time corrections can look older than startup epochs. Rebase
+    // when UTC resolves or time goes back beyond the 60-epoch (1 Hz) buffer.
+    if (towDelta < -60000 || (towDelta !== 0 && timeResolved && !previous.timeResolved)) {
+      positionComparisonState.epochs.clear();
+      positionComparisonState.latest = { NAV: null, NAV2: null };
+      positionComparisonState.pair = null;
+      positionComparisonState.pendingSince = null;
+    }
+    const sample = { iTow, timeResolved, latitude, longitude, height: data.getInt32(32, true) / 1000, hAcc: data.getUint32(40, true) / 1000, vAcc: data.getUint32(44, true) / 1000, fixType, flags, satellites: payload[23], receivedAt: Date.now(), positionValid: Boolean(flags & 1) && [2, 3, 4].includes(fixType) && !(payload[78] & 1) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180 };
     const isNewer = (tow, previous) => !previous || (tow - previous.iTow + 604800000) % 604800000 < 302400000;
     if (isNewer(iTow, positionComparisonState.latest[source])) positionComparisonState.latest[source] = sample;
     if (!positionComparisonState.epochs.has(iTow)) positionComparisonState.epochs.set(iTow, {});

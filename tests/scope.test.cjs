@@ -2459,6 +2459,64 @@ test("position comparison buffers delayed epochs and rejects invalid fixes witho
   assert.equal(state.pair.NAV.iTow, 0);
 });
 
+test("cold-start time corrections refresh both the online observer and NAV/NAV2 comparison", () => {
+  const state = { epochs: new Map(), latest: { NAV: null, NAV2: null }, pair: null };
+  let now = 1000;
+  const context = loadFunctions(["recordPositionSolution", "parseNavDop", "satelliteObserverLocation", "renderPositionComparison", "positionSolutionDelta"], {
+    positionComparisonState: state, replayRebuilding: false, replayData: null,
+    Date: { now: () => now }, settings: { satelliteLocationLocked: false },
+    receiver: { value: "x20" }, renderSatellites() {},
+    positionComparisonPanel: {}, positionComparisonStatus: { dataset: {} }, positionComparisonEpoch: {},
+    positionComparisonHorizontal: {}, positionComparisonVertical: {}, positionComparisonQuality: {},
+  });
+  const pvt = (tow, valid, resolved = valid) => {
+    const bytes = new Uint8Array(92); const data = new DataView(bytes.buffer);
+    data.setUint32(0, tow, true); bytes[11] = resolved ? 7 : 0;
+    bytes[20] = valid ? 3 : 0; bytes[21] = valid ? 1 : 0;
+    data.setInt32(28, 600000000, true); data.setInt32(24, 100000000, true);
+    return bytes;
+  };
+  for (const [startupTow, fixedTow] of [[0, 500000000], [500000000, 100000], [10000, 9000]]) {
+    state.epochs.clear(); state.latest = { NAV: null, NAV2: null }; state.pair = null;
+    for (const source of ["NAV", "NAV2"]) context.recordPositionSolution(pvt(startupTow, false), source);
+    assert.match(context.satelliteObserverLocation("NAV").error, /Waiting for a fresh valid/);
+    assert.equal(context.positionComparisonStatus.dataset.state, "invalid");
+    now += 1000;
+    context.recordPositionSolution(pvt(fixedTow, true), "NAV");
+    assert.equal(state.pair, null, "Discard the old invalid pair while awaiting NAV2");
+    assert.deepEqual({ ...context.satelliteObserverLocation("NAV") }, { latitude: 60, longitude: 10, mode: "receiver-live" });
+    context.recordPositionSolution(pvt(fixedTow, true), "NAV2");
+    assert.equal(context.positionComparisonStatus.dataset.state, "matched");
+    assert.equal(state.pair.NAV.iTow, fixedTow);
+    assert.equal(state.pair.NAV2.iTow, fixedTow);
+    assert.ok(!state.epochs.has(startupTow), "Discard pre-correction samples and DOP");
+    now += 1000;
+    for (const source of ["NAV", "NAV2"]) context.recordPositionSolution(pvt(fixedTow + 1000, true), source);
+    assert.equal(state.latest.NAV.receivedAt, now);
+    assert.equal(state.pair.NAV.iTow, fixedTow + 1000);
+  }
+  context.recordPositionSolution(pvt(1000, true), "NAV");
+  context.recordPositionSolution(pvt(1000, true), "NAV2");
+  // A fully resolved receiver can also reset its time-of-week later in the session.
+  context.recordPositionSolution(pvt(100000, true), "NAV");
+  context.recordPositionSolution(pvt(100000, true), "NAV2");
+  context.recordPositionSolution(pvt(1000, true), "NAV");
+  context.recordPositionSolution(pvt(1000, true), "NAV2");
+  assert.equal(state.pair.NAV.iTow, 1000);
+  assert.equal(context.positionComparisonStatus.dataset.state, "matched");
+  state.epochs.clear(); state.latest = { NAV: null, NAV2: null }; state.pair = null;
+  for (const source of ["NAV", "NAV2"]) context.recordPositionSolution(pvt(100000, true), source);
+  for (const source of ["NAV", "NAV2"]) context.recordPositionSolution(pvt(40000, true), source);
+  assert.equal(state.latest.NAV.iTow, 100000, "A 60-second delayed report must not rebase");
+  assert.equal(state.pair.NAV.iTow, 100000);
+  state.epochs.clear(); state.latest = { NAV: null, NAV2: null }; state.pair = null;
+  for (const tow of [604799000, 0]) {
+    for (const source of ["NAV", "NAV2"]) context.recordPositionSolution(pvt(tow, true), source);
+  }
+  assert.equal(state.pair.NAV.iTow, 0);
+  assert.ok(state.epochs.has(604799000), "GPS-week rollover must not discard buffered epochs");
+});
+
 test("receiver configuration enables NAV-DOP and X20 NAV2-DOP at one epoch per report", async () => {
   const requests = [];
   const context = loadFunctions(["configureMonSpan", "receiverInterfaceRequests", "gnssFeatureConfigurationRequests", "receiverMonitoringConfigurationRequests"], {
